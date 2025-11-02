@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <za.ac.ukzn.ipsnavigation.ui.ZoomableImageView
+        android:id="@+id/zoomableMap"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:scaleType="matrix"
+        android:contentDescription="Floorplan Map" />
+
+    <ImageButton
+        android:id="@+id/recenterButton"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:layout_gravity="bottom|end"
+        android:layout_margin="16dp"
+        android:background="@android:color/transparent"
+        android:src="@android:drawable/ic_menu_mylocation"
+        android:tint="@android:color/white" />
+</FrameLayout>

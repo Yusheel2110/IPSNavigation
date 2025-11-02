@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:orientation="vertical"
+    android:background="#101010"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:padding="0dp">
+
+    <!-- ===== Top Controls ===== -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:padding="8dp"
+        android:gravity="center">
+
+        <Spinner
+            android:id="@+id/destinationSpinner"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:spinnerMode="dropdown"
+            android:popupBackground="@android:color/white" />
+
+        <Button
+            android:id="@+id/navigateButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:text="Locate &amp; Go"
+            android:backgroundTint="#E53935"
+            android:textColor="@android:color/white" />
+    </LinearLayout>
+
+    <!-- ===== Current Position Label ===== -->
+    <TextView
+        android:id="@+id/predictedTextView"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Current position: Unknown"
+        android:textColor="@android:color/white"
+        android:paddingStart="16dp"
+        android:paddingBottom="4dp"
+        android:textSize="15sp" />
+
+    <!-- ===== Navigation Instructions Panel ===== -->
+    <TextView
+        android:id="@+id/instructionTextView"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:padding="8dp"
+        android:textColor="@android:color/white"
+        android:textSize="14sp"
+        android:background="#1E1E1E"
+        android:text="Navigation instructions will appear here." />
+
+    <!-- ===== Map Fragment Container ===== -->
+    <fragment
+        android:id="@+id/mapFragmentContainer"
+        android:name="za.ac.ukzn.ipsnavigation.ui.MapFragment"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1" />
+
+</LinearLayout>

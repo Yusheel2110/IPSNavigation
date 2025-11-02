@@ -1,0 +1,20 @@
+{
+  "metadata": {
+    "building": "EECE North",
+    "floor": 1,
+    "units": "meters",
+    "scale": {
+      "px_per_meter": 104.03
+    },
+    "image_size_px": {
+      "width": 3179,
+      "height": 2245
+    },
+    "origin": "bottom_left_corner_room_1-01",
+    "north_angle_deg": -81.0,
+    "alignment_offsets_m": {
+      "x": 1.2,
+      "y": 9.8
+    }
+  }
+}

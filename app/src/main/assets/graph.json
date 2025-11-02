@@ -1,0 +1,538 @@
+{
+    "metadata": {
+        "building": "EECE North",
+        "floor": 1,
+        "units": "meters",
+        "scale": {
+            "px_per_meter": 104.03
+        },
+        "image_size_px": {
+            "width": 3179,
+            "height": 2245
+        },
+        "origin": "bottom_left_corner_room_1-01",
+        "north_angle_deg": -81.0,
+        "alignment_offsets_m": {
+            "x": 1.2,
+            "y": 9.8
+        }
+    },
+    "nodes": [
+        {
+            "id": "101",
+            "x_m": 1.0,
+            "y_m": 0.0,
+            "z": 1,
+            "label": "1-01",
+            "type": "room"
+        },
+        {
+            "id": "102",
+            "x_m": 0.1,
+            "y_m": 1.0,
+            "z": 1,
+            "label": "1-02",
+            "type": "room"
+        },
+        {
+            "id": "103",
+            "x_m": 0.1,
+            "y_m": 4.3,
+            "z": 1,
+            "label": "1-03",
+            "type": "room"
+        },
+        {
+            "id": "104",
+            "x_m": 1.0,
+            "y_m": 5.5,
+            "z": 1,
+            "label": "1-04",
+            "type": "room"
+        },
+        {
+            "id": "bigdoors",
+            "x_m": 2.0,
+            "y_m": 4.6,
+            "z": 1,
+            "label": "big doors",
+            "type": "turn"
+        },
+        {
+            "id": "105",
+            "x_m": 3.0,
+            "y_m": 5.5,
+            "z": 1,
+            "label": "1-05",
+            "type": "room"
+        },
+        {
+            "id": "elevator",
+            "x_m": 3.3,
+            "y_m": 3.9,
+            "z": 1,
+            "label": "elevator",
+            "type": "junction"
+        },
+        {
+            "id": "106",
+            "x_m": 7.5,
+            "y_m": 5.5,
+            "z": 1,
+            "label": "1-06",
+            "type": "room"
+        },
+        {
+            "id": "107",
+            "x_m": 13.0,
+            "y_m": 5.5,
+            "z": 1,
+            "label": "1-07",
+            "type": "room"
+        },
+        {
+            "id": "108",
+            "x_m": 16.3,
+            "y_m": 5.5,
+            "z": 1,
+            "label": "1-08",
+            "type": "room"
+        },
+        {
+            "id": "108A",
+            "x_m": 19.8,
+            "y_m": 5.5,
+            "z": 1,
+            "label": "1-08A",
+            "type": "room"
+        },
+        {
+            "id": "staircase",
+            "x_m": 20.6,
+            "y_m": 4.0,
+            "z": 1,
+            "label": "staircase",
+            "type": "junction"
+        },
+        {
+            "id": "117",
+            "x_m": 22.0,
+            "y_m": 4.0,
+            "z": 1,
+            "label": "1-17",
+            "type": "room"
+        },
+        {
+            "id": "109",
+            "x_m": 23.0,
+            "y_m": 5.5,
+            "z": 1,
+            "label": "1-09",
+            "type": "room"
+        },
+        {
+            "id": "hallend",
+            "x_m": 25.99,
+            "y_m": 4.64,
+            "z": 1,
+            "label": "Hall End",
+            "type": "turn"
+        },
+        {
+            "id": "110",
+            "x_m": 27.0,
+            "y_m": 5.5,
+            "z": 1,
+            "label": "1-10",
+            "type": "room"
+        },
+        {
+            "id": "111",
+            "x_m": 28.0,
+            "y_m": 4.5,
+            "z": 1,
+            "label": "1-11",
+            "type": "room"
+        },
+        {
+            "id": "116",
+            "x_m": 26.0,
+            "y_m": 2.5,
+            "z": 1,
+            "label": "1-16",
+            "type": "room"
+        },
+        {
+            "id": "112",
+            "x_m": 28.0,
+            "y_m": 0.5,
+            "z": 1,
+            "label": "1-12",
+            "type": "room"
+        },
+        {
+            "id": "113",
+            "x_m": 27.0,
+            "y_m": -3.5,
+            "z": 1,
+            "label": "1-13",
+            "type": "room"
+        },
+        {
+            "id": "C1",
+            "x_m": 1.0187,
+            "y_m": 0.6741,
+            "z": 1,
+            "label": "C1",
+            "type": "junction"
+        },
+        {
+            "id": "Stairs",
+            "x_m": 1.9433,
+            "y_m": 0.6749,
+            "z": 1,
+            "label": "Stairs",
+            "type": "junction"
+        },
+        {
+            "id": "C2",
+            "x_m": 1.017,
+            "y_m": 0.9334,
+            "z": 1,
+            "label": "C2",
+            "type": "junction"
+        },
+        {
+            "id": "C3",
+            "x_m": 1.0142,
+            "y_m": 4.2841,
+            "z": 1,
+            "label": "C3",
+            "type": "junction"
+        },
+        {
+            "id": "C4",
+            "x_m": 1.0154,
+            "y_m": 4.6353,
+            "z": 1,
+            "label": "C4",
+            "type": "junction"
+        },
+        {
+            "id": "C5",
+            "x_m": 2.9398,
+            "y_m": 4.6369,
+            "z": 1,
+            "label": "C5",
+            "type": "junction"
+        },
+        {
+            "id": "C6",
+            "x_m": 3.2843,
+            "y_m": 4.6369,
+            "z": 1,
+            "label": "C6",
+            "type": "junction"
+        },
+        {
+            "id": "C7",
+            "x_m": 7.4118,
+            "y_m": 4.6369,
+            "z": 1,
+            "label": "C7",
+            "type": "junction"
+        },
+        {
+            "id": "C8",
+            "x_m": 12.9858,
+            "y_m": 4.6369,
+            "z": 1,
+            "label": "C8",
+            "type": "junction"
+        },
+        {
+            "id": "C9",
+            "x_m": 16.3398,
+            "y_m": 4.6369,
+            "z": 1,
+            "label": "C9",
+            "type": "junction"
+        },
+        {
+            "id": "C10",
+            "x_m": 19.6938,
+            "y_m": 4.6369,
+            "z": 1,
+            "label": "C10",
+            "type": "junction"
+        },
+        {
+            "id": "C11",
+            "x_m": 20.6478,
+            "y_m": 4.6369,
+            "z": 1,
+            "label": "C11",
+            "type": "junction"
+        },
+        {
+            "id": "C12",
+            "x_m": 21.9898,
+            "y_m": 4.6369,
+            "z": 1,
+            "label": "C12",
+            "type": "junction"
+        },
+        {
+            "id": "C13",
+            "x_m": 23.0568,
+            "y_m": 4.6369,
+            "z": 1,
+            "label": "C13",
+            "type": "junction"
+        },
+        {
+            "id": "C14",
+            "x_m": 27.0163,
+            "y_m": 4.6369,
+            "z": 1,
+            "label": "C14",
+            "type": "junction"
+        },
+        {
+            "id": "C15",
+            "x_m": 27.0398,
+            "y_m": 4.3834,
+            "z": 1,
+            "label": "C15",
+            "type": "junction"
+        },
+        {
+            "id": "C16",
+            "x_m": 27.0398,
+            "y_m": 2.4684,
+            "z": 1,
+            "label": "C16",
+            "type": "junction"
+        },
+        {
+            "id": "C17",
+            "x_m": 27.032,
+            "y_m": 0.4515,
+            "z": 1,
+            "label": "C17",
+            "type": "junction"
+        }
+    ],
+    "edges": [
+        {
+            "u": "C1",
+            "v": "C2",
+            "w": 0.26,
+            "edge_type": "corridor"
+        },
+        {
+            "u": "C2",
+            "v": "C3",
+            "w": 3.35,
+            "edge_type": "corridor"
+        },
+        {
+            "u": "C3",
+            "v": "C4",
+            "w": 0.35,
+            "edge_type": "corridor"
+        },
+        {
+            "u": "C4",
+            "v": "C5",
+            "w": 1.92,
+            "edge_type": "corridor"
+        },
+        {
+            "u": "C5",
+            "v": "C6",
+            "w": 0.34,
+            "edge_type": "corridor"
+        },
+        {
+            "u": "C6",
+            "v": "C7",
+            "w": 4.13,
+            "edge_type": "corridor"
+        },
+        {
+            "u": "C7",
+            "v": "C8",
+            "w": 5.57,
+            "edge_type": "corridor"
+        },
+        {
+            "u": "C8",
+            "v": "C9",
+            "w": 3.35,
+            "edge_type": "corridor"
+        },
+        {
+            "u": "C9",
+            "v": "C10",
+            "w": 3.35,
+            "edge_type": "corridor"
+        },
+        {
+            "u": "C10",
+            "v": "C11",
+            "w": 0.95,
+            "edge_type": "corridor"
+        },
+        {
+            "u": "C11",
+            "v": "C12",
+            "w": 1.34,
+            "edge_type": "corridor"
+        },
+        {
+            "u": "C12",
+            "v": "C13",
+            "w": 1.07,
+            "edge_type": "corridor"
+        },
+        {
+            "u": "C13",
+            "v": "C14",
+            "w": 3.96,
+            "edge_type": "corridor"
+        },
+        {
+            "u": "C14",
+            "v": "C15",
+            "w": 0.25,
+            "edge_type": "corridor"
+        },
+        {
+            "u": "C15",
+            "v": "C16",
+            "w": 1.92,
+            "edge_type": "corridor"
+        },
+        {
+            "u": "C16",
+            "v": "C17",
+            "w": 2.02,
+            "edge_type": "corridor"
+        },
+        {
+            "u": "101",
+            "v": "C1",
+            "w": 0.67,
+            "edge_type": "manual"
+        },
+        {
+            "u": "104",
+            "v": "C4",
+            "w": 0.86,
+            "edge_type": "manual"
+        },
+        {
+            "u": "105",
+            "v": "C5",
+            "w": 0.87,
+            "edge_type": "manual"
+        },
+        {
+            "u": "elevator",
+            "v": "C6",
+            "w": 0.74,
+            "edge_type": "manual"
+        },
+        {
+            "u": "106",
+            "v": "C7",
+            "w": 0.87,
+            "edge_type": "manual"
+        },
+        {
+            "u": "107",
+            "v": "C8",
+            "w": 0.86,
+            "edge_type": "manual"
+        },
+        {
+            "u": "108",
+            "v": "C9",
+            "w": 0.86,
+            "edge_type": "manual"
+        },
+        {
+            "u": "108A",
+            "v": "C10",
+            "w": 0.87,
+            "edge_type": "manual"
+        },
+        {
+            "u": "staircase",
+            "v": "C11",
+            "w": 0.64,
+            "edge_type": "manual"
+        },
+        {
+            "u": "109",
+            "v": "C13",
+            "w": 0.86,
+            "edge_type": "manual"
+        },
+        {
+            "u": "110",
+            "v": "C14",
+            "w": 0.86,
+            "edge_type": "manual"
+        },
+        {
+            "u": "Stairs",
+            "v": "C1",
+            "w": 0.92,
+            "edge_type": "manual"
+        },
+        {
+            "u": "102",
+            "v": "C2",
+            "w": 0.92,
+            "edge_type": "auto"
+        },
+        {
+            "u": "103",
+            "v": "C3",
+            "w": 0.91,
+            "edge_type": "auto"
+        },
+        {
+            "u": "117",
+            "v": "C12",
+            "w": 0.64,
+            "edge_type": "auto"
+        },
+        {
+            "u": "111",
+            "v": "C15",
+            "w": 0.97,
+            "edge_type": "auto"
+        },
+        {
+            "u": "116",
+            "v": "C16",
+            "w": 1.04,
+            "edge_type": "auto"
+        },
+        {
+            "u": "112",
+            "v": "C17",
+            "w": 0.97,
+            "edge_type": "auto"
+        },
+        {
+            "u": "113",
+            "v": "C17",
+            "w": 3.95,
+            "edge_type": "auto"
+        }
+    ]
+}
