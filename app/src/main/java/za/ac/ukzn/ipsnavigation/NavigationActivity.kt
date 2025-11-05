@@ -89,6 +89,7 @@ class NavigationActivity : AppCompatActivity() {
             val (fusedX, fusedY) = fusionManager.getPosition()
             runOnUiThread {
                 mapFragment.updateUserPosition(fusedX, fusedY)
+
             }
         }
 
@@ -121,7 +122,7 @@ class NavigationActivity : AppCompatActivity() {
 
             // ===== Find nearest node to predicted position =====
             val nearestNode = graphManager.findNearestNode(x, y)
-            if (nearestNode == null) {
+            if (nearestNode?.label == null) {
                 Toast.makeText(this@NavigationActivity, "No nearby node found.", Toast.LENGTH_SHORT).show()
                 return@launch
             }
@@ -141,9 +142,9 @@ class NavigationActivity : AppCompatActivity() {
             instructionText.text = instructions.joinToString("\n• ", prefix = "• ")
 
             // ===== Reset Kalman & PDR to Predicted Location =====
-            pdrManager.resetTo(x, y)
-            fusionManager.resetTo(x, y)
-            mapFragment.updateUserPosition(x, y)
+            pdrManager.resetTo(x.toDouble(), y.toDouble())
+            fusionManager.resetTo(x.toDouble(), y.toDouble())
+            mapFragment.updateUserPosition(x.toDouble(), y.toDouble())
 
             // ===== Periodic Wi-Fi Corrections =====
             lifecycleScope.launch(Dispatchers.IO) {
@@ -155,7 +156,7 @@ class NavigationActivity : AppCompatActivity() {
                     if (wifiResults.isNotEmpty()) {
                         val correction = modelInference.predictFromWifi(wifiResults)
                         correction?.let { (cx, cy) ->
-                            fusionManager.correct(cx, cy)
+                            fusionManager.correct(cx.toDouble(), cy.toDouble())
                             Log.d("NavigationActivity", "📡 Correction applied → x=$cx , y=$cy")
                         }
                     }
