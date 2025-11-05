@@ -65,7 +65,7 @@ class GraphManager private constructor(private val context: Context) {
             getNodeById(neighborId)?.let { node -> node to e.w }
         }
     }
-    fun getNearestNode(x: Double, y: Double): Node? {
+    fun findNearestNode(x: Double, y: Double): Node? {
         return graph.nodes.minByOrNull { node ->
             val dx = node.x_m - x
             val dy = node.y_m - y
@@ -73,5 +73,9 @@ class GraphManager private constructor(private val context: Context) {
         }
     }
 
+
+
     fun getMetadata(): Metadata = graph.metadata
 }
+
+

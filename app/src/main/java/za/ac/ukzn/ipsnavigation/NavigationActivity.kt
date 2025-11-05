@@ -1,13 +1,13 @@
 package za.ac.ukzn.ipsnavigation
 
 import android.os.Bundle
+import android.util.Log
 import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import za.ac.ukzn.ipsnavigation.data.HeadingManager
 import za.ac.ukzn.ipsnavigation.data.*
 import za.ac.ukzn.ipsnavigation.models.Node
 import za.ac.ukzn.ipsnavigation.ui.MapFragment
@@ -15,7 +15,8 @@ import za.ac.ukzn.ipsnavigation.utils.InstructionGenerator
 
 /**
  * Final IPS Navigation Activity
- * Now includes Kalman fusion (Wi-Fi + PDR) and smooth heading integration.
+ * Updated for native KNN inference (no TensorFlow).
+ * Includes Wi-Fi scanning, KNN localization, and PDR + Kalman fusion.
  */
 class NavigationActivity : AppCompatActivity() {
 
@@ -31,12 +32,6 @@ class NavigationActivity : AppCompatActivity() {
     private lateinit var navigateButton: Button
     private lateinit var predictedText: TextView
     private lateinit var instructionText: TextView
-
-    private val allBssids = listOf(
-        "00:11:22:33:44:55",
-        "AA:BB:CC:DD:EE:FF",
-        "11:22:33:44:55:66"
-    )
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -56,7 +51,7 @@ class NavigationActivity : AppCompatActivity() {
         }
         headingManager.start()
 
-        // ===== Initialize or Attach MapFragment =====
+        // ===== Initialize MapFragment =====
         val existing = supportFragmentManager.findFragmentById(R.id.mapFragmentContainer)
         if (existing is MapFragment) {
             mapFragment = existing
@@ -106,29 +101,37 @@ class NavigationActivity : AppCompatActivity() {
             wifiScanManager.startScan()
             delay(2500)
 
-            val results = wifiScanManager.getScanResults()
-            if (results.isEmpty()) {
+            val scanResults = wifiScanManager.getScanResults()
+            if (scanResults.isEmpty()) {
                 Toast.makeText(this@NavigationActivity, "No Wi-Fi results found.", Toast.LENGTH_SHORT).show()
                 return@launch
             }
 
-            val rssiVector = wifiScanManager.getRssiVector(allBssids)
-            val predictedLabel = modelInference.predictLocation(rssiVector)
-
-            if (predictedLabel == null) {
+            // ==== Run Native KNN Localization ====
+            val predictedPosition = modelInference.predictFromWifi(scanResults)
+            if (predictedPosition == null) {
                 Toast.makeText(this@NavigationActivity, "Could not determine location.", Toast.LENGTH_SHORT).show()
                 return@launch
             }
 
-            predictedText.text = "Current position: $predictedLabel"
-            Toast.makeText(this@NavigationActivity, "You are at $predictedLabel", Toast.LENGTH_SHORT).show()
+            val (x, y) = predictedPosition
+            Log.d("NavigationActivity", "📍 Predicted position → x=$x , y=$y")
+            predictedText.text = "Current position: x=$x , y=$y"
+            Toast.makeText(this@NavigationActivity, "You are at x=$x, y=$y", Toast.LENGTH_SHORT).show()
+
+            // ===== Find nearest node to predicted position =====
+            val nearestNode = graphManager.findNearestNode(x, y)
+            if (nearestNode == null) {
+                Toast.makeText(this@NavigationActivity, "No nearby node found.", Toast.LENGTH_SHORT).show()
+                return@launch
+            }
 
             // ===== Draw Route =====
-            mapFragment.drawRoute(predictedLabel, goalLabel)
+            mapFragment.drawRoute(nearestNode.label, goalLabel)
 
             // ===== Generate Instructions =====
             val pathFinder = PathFinder(this@NavigationActivity)
-            val routeNodes: List<Node> = pathFinder.findPath(predictedLabel, goalLabel)
+            val routeNodes: List<Node> = pathFinder.findPath(nearestNode.label, goalLabel)
             if (routeNodes.isEmpty()) {
                 instructionText.text = "No valid route found."
                 return@launch
@@ -137,15 +140,12 @@ class NavigationActivity : AppCompatActivity() {
             val instructions = InstructionGenerator.generateInstructions(this@NavigationActivity, routeNodes)
             instructionText.text = instructions.joinToString("\n• ", prefix = "• ")
 
-            // ===== Reset and Sync Kalman + PDR =====
-            val startNode = graphManager.getNodeByLabel(predictedLabel)
-            if (startNode != null) {
-                pdrManager.resetTo(startNode.x_m, startNode.y_m)
-                fusionManager.resetTo(startNode.x_m, startNode.y_m)
-                mapFragment.updateUserPosition(startNode.x_m, startNode.y_m)
-            }
+            // ===== Reset Kalman & PDR to Predicted Location =====
+            pdrManager.resetTo(x, y)
+            fusionManager.resetTo(x, y)
+            mapFragment.updateUserPosition(x, y)
 
-            // ===== Start Periodic Wi-Fi Correction Loop =====
+            // ===== Periodic Wi-Fi Corrections =====
             lifecycleScope.launch(Dispatchers.IO) {
                 while (true) {
                     delay(8000)
@@ -153,13 +153,10 @@ class NavigationActivity : AppCompatActivity() {
                     delay(2500)
                     val wifiResults = wifiScanManager.getScanResults()
                     if (wifiResults.isNotEmpty()) {
-                        val vec = wifiScanManager.getRssiVector(allBssids)
-                        val label = modelInference.predictLocation(vec)
-                        label?.let {
-                            val node = graphManager.getNodeByLabel(it)
-                            if (node != null) {
-                                fusionManager.correct(node.x_m, node.y_m)
-                            }
+                        val correction = modelInference.predictFromWifi(wifiResults)
+                        correction?.let { (cx, cy) ->
+                            fusionManager.correct(cx, cy)
+                            Log.d("NavigationActivity", "📡 Correction applied → x=$cx , y=$cy")
                         }
                     }
                 }
