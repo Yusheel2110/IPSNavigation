@@ -46,6 +46,7 @@ dependencies {
     implementation("com.google.code.gson:gson:2.10.1")
     implementation("org.tensorflow:tensorflow-lite:2.14.0")
     implementation("org.tensorflow:tensorflow-lite-support:0.4.4")
+    implementation("androidx.fragment:fragment-ktx:1.8.2")
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)

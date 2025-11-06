@@ -12,15 +12,19 @@ import android.util.Log
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
-import androidx.fragment.app.commit
 import za.ac.ukzn.ipsnavigation.R
 import za.ac.ukzn.ipsnavigation.data.LocationFusionManager
 import za.ac.ukzn.ipsnavigation.data.ModelInference
 import kotlin.math.hypot
 
 /**
- * Handles Wi-Fi localization, model inference, and map updates.
- * Option A: uses raw RSSI vectors for on-device KNN (no scaler).
+ * NavigationActivity
+ * -------------------------------------------------------
+ * Controls on-device Wi-Fi localization and map updates.
+ * Uses:
+ *  - ModelInference (raw RSSI → KNN)
+ *  - LocationFusionManager (Kalman)
+ *  - MapFragment (already in layout)
  */
 class NavigationActivity : AppCompatActivity() {
 
@@ -35,7 +39,7 @@ class NavigationActivity : AppCompatActivity() {
     private val scanIntervalMs = 8000L
     private var scanRunnable: Runnable? = null
 
-    // Ask for location + Wi-Fi permissions
+    // Permissions launcher
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
@@ -51,25 +55,24 @@ class NavigationActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_navigation)
 
-        // Initialize components
         wifiManager = applicationContext.getSystemService(WIFI_SERVICE) as WifiManager
         modelInference = ModelInference(this)
         fusion = LocationFusionManager()
 
-        // Load MapFragment dynamically
-        if (savedInstanceState == null) {
-            mapFragment = MapFragment()
-            supportFragmentManager.commit {
-                replace(R.id.fragmentContainer, mapFragment)
-            }
+        // 🔹 Get MapFragment directly from XML layout
+        val existing = supportFragmentManager.findFragmentById(R.id.mapFragmentContainer)
+        if (existing != null && existing is MapFragment) {
+            mapFragment = existing
+            Log.d("NavigationActivity", "🗺️ Using existing MapFragment from layout.")
         } else {
-            mapFragment =
-                supportFragmentManager.findFragmentById(R.id.fragmentContainer) as MapFragment
+            Log.e("NavigationActivity", "❌ MapFragment not found in layout (id: mapFragmentContainer).")
+            mapFragment = MapFragment()
         }
 
         requestPermissionsIfNeeded()
     }
 
+    // 🔹 Check and request permissions
     private fun requestPermissionsIfNeeded() {
         val permissions = arrayOf(
             Manifest.permission.ACCESS_FINE_LOCATION,
@@ -89,6 +92,7 @@ class NavigationActivity : AppCompatActivity() {
         }
     }
 
+    // 🔹 Schedule periodic Wi-Fi scans
     private fun startWifiScanning() {
         Log.i("NavigationActivity", "📡 Starting periodic Wi-Fi scanning...")
         scanRunnable = object : Runnable {
@@ -104,7 +108,7 @@ class NavigationActivity : AppCompatActivity() {
 
                 val success = wifiManager.startScan()
                 if (!success) {
-                    Log.w("NavigationActivity", "⚠️ Failed to start Wi-Fi scan (maybe throttled).")
+                    Log.w("NavigationActivity", "⚠️ Failed to start Wi-Fi scan (may be throttled).")
                 } else {
                     Log.i("NavigationActivity", "📶 Wi-Fi scan started.")
                 }
@@ -120,6 +124,7 @@ class NavigationActivity : AppCompatActivity() {
         )
     }
 
+    // 🔹 Called when scan results are ready
     private fun onWifiScanResults(results: List<ScanResult>) {
         if (results.isEmpty()) {
             Log.w("NavigationActivity", "⚠️ Wi-Fi scan returned no results.")
@@ -143,17 +148,18 @@ class NavigationActivity : AppCompatActivity() {
         applyWifiCorrection(predX, predY)
     }
 
+    // 🔹 Apply predicted Wi-Fi correction to Kalman + map
     private fun applyWifiCorrection(predX: Double, predY: Double) {
         if (!fusion.isInitialized()) {
             fusion.resetTo(predX, predY)
             lastWifiCorrection = Pair(predX, predY)
-            Log.d("NavigationActivity", "Kalman initialized with Wi-Fi at ($predX,$predY)")
+            Log.d("NavigationActivity", "Kalman initialized with Wi-Fi at ($predX, $predY)")
         } else {
             val last = lastWifiCorrection
             val dist = if (last != null) hypot(predX - last.first, predY - last.second)
             else Double.MAX_VALUE
 
-            if (dist > 0.25) { // 25 cm threshold for update
+            if (dist > 0.25) { // 25 cm threshold
                 fusion.correct(predX, predY)
                 lastWifiCorrection = Pair(predX, predY)
                 Log.d(
