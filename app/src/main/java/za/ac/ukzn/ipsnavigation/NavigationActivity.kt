@@ -1,175 +1,181 @@
-package za.ac.ukzn.ipsnavigation
+package za.ac.ukzn.ipsnavigation.ui
 
+import android.Manifest
+import android.content.IntentFilter
+import android.content.pm.PackageManager
+import android.net.wifi.ScanResult
+import android.net.wifi.WifiManager
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
-import android.widget.*
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
-import androidx.lifecycle.lifecycleScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
-import za.ac.ukzn.ipsnavigation.data.*
-import za.ac.ukzn.ipsnavigation.models.Node
-import za.ac.ukzn.ipsnavigation.ui.MapFragment
-import za.ac.ukzn.ipsnavigation.utils.InstructionGenerator
+import androidx.core.app.ActivityCompat
+import androidx.fragment.app.commit
+import za.ac.ukzn.ipsnavigation.R
+import za.ac.ukzn.ipsnavigation.data.LocationFusionManager
+import za.ac.ukzn.ipsnavigation.data.ModelInference
+import kotlin.math.hypot
 
 /**
- * Final IPS Navigation Activity
- * Updated for native KNN inference (no TensorFlow).
- * Includes Wi-Fi scanning, KNN localization, and PDR + Kalman fusion.
+ * Handles Wi-Fi localization, model inference, and map updates.
+ * Option A: uses raw RSSI vectors for on-device KNN (no scaler).
  */
 class NavigationActivity : AppCompatActivity() {
 
-    private lateinit var graphManager: GraphManager
-    private lateinit var mapFragment: MapFragment
-    private lateinit var wifiScanManager: WifiScanManager
+    private lateinit var wifiManager: WifiManager
     private lateinit var modelInference: ModelInference
-    private lateinit var pdrManager: PDRManager
-    private lateinit var fusionManager: LocationFusionManager
-    private lateinit var headingManager: HeadingManager
+    private lateinit var fusion: LocationFusionManager
+    private lateinit var mapFragment: MapFragment
 
-    private lateinit var destinationInput: Spinner
-    private lateinit var navigateButton: Button
-    private lateinit var predictedText: TextView
-    private lateinit var instructionText: TextView
+    private val handler = Handler(Looper.getMainLooper())
+    private var lastWifiCorrection: Pair<Double, Double>? = null
+
+    private val scanIntervalMs = 8000L
+    private var scanRunnable: Runnable? = null
+
+    // Ask for location + Wi-Fi permissions
+    private val permissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        val granted = permissions.all { it.value }
+        if (granted) {
+            startWifiScanning()
+        } else {
+            Log.e("NavigationActivity", "❌ Location/Wi-Fi permissions denied.")
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_navigation)
 
-        // ===== Initialize Core Managers =====
-        graphManager = GraphManager.getInstance(this)
-        if (!graphManager.isLoaded()) graphManager.loadGraphFromAssets()
-
-        wifiScanManager = WifiScanManager(this)
+        // Initialize components
+        wifiManager = applicationContext.getSystemService(WIFI_SERVICE) as WifiManager
         modelInference = ModelInference(this)
-        pdrManager = PDRManager(this)
-        fusionManager = LocationFusionManager()
-        headingManager = HeadingManager(this) { headingDeg ->
-            // Optionally forward to map for directional arrow
-            // mapFragment.updateUserHeading(headingDeg)
-        }
-        headingManager.start()
+        fusion = LocationFusionManager()
 
-        // ===== Initialize MapFragment =====
-        val existing = supportFragmentManager.findFragmentById(R.id.mapFragmentContainer)
-        if (existing is MapFragment) {
-            mapFragment = existing
-        } else {
+        // Load MapFragment dynamically
+        if (savedInstanceState == null) {
             mapFragment = MapFragment()
-            supportFragmentManager.beginTransaction()
-                .replace(R.id.mapFragmentContainer, mapFragment)
-                .commitNow()
-        }
-
-        // ===== Initialize UI =====
-        destinationInput = findViewById(R.id.destinationSpinner)
-        navigateButton = findViewById(R.id.navigateButton)
-        predictedText = findViewById(R.id.predictedTextView)
-        instructionText = findViewById(R.id.instructionTextView)
-
-        val allLabels = graphManager.getAllNodes().mapNotNull { it.label }.sorted()
-        val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, allLabels)
-        destinationInput.adapter = adapter
-
-        wifiScanManager.requestPermissions(this)
-
-        navigateButton.setOnClickListener {
-            val goalLabel = destinationInput.selectedItem?.toString()
-            if (goalLabel.isNullOrEmpty()) {
-                Toast.makeText(this, "Select a destination", Toast.LENGTH_SHORT).show()
-                return@setOnClickListener
+            supportFragmentManager.commit {
+                replace(R.id.fragmentContainer, mapFragment)
             }
-            runLocalizationAndNavigate(goalLabel)
+        } else {
+            mapFragment =
+                supportFragmentManager.findFragmentById(R.id.fragmentContainer) as MapFragment
         }
 
-        // ===== Start PDR Tracking =====
-        pdrManager.start { deltaX, deltaY ->
-            fusionManager.predict(deltaX, deltaY)
-            val (fusedX, fusedY) = fusionManager.getPosition()
-            runOnUiThread {
-                mapFragment.updateUserPosition(fusedX, fusedY)
-
-            }
-        }
-
-        Toast.makeText(this, "Navigation initialized with Kalman fusion.", Toast.LENGTH_SHORT).show()
+        requestPermissionsIfNeeded()
     }
 
-    private fun runLocalizationAndNavigate(goalLabel: String) {
-        lifecycleScope.launch(Dispatchers.Main) {
-            Toast.makeText(this@NavigationActivity, "Scanning Wi-Fi…", Toast.LENGTH_SHORT).show()
-            wifiScanManager.startScan()
-            delay(2500)
+    private fun requestPermissionsIfNeeded() {
+        val permissions = arrayOf(
+            Manifest.permission.ACCESS_FINE_LOCATION,
+            Manifest.permission.ACCESS_WIFI_STATE,
+            Manifest.permission.CHANGE_WIFI_STATE
+        )
 
-            val scanResults = wifiScanManager.getScanResults()
-            if (scanResults.isEmpty()) {
-                Toast.makeText(this@NavigationActivity, "No Wi-Fi results found.", Toast.LENGTH_SHORT).show()
-                return@launch
-            }
+        val missing = permissions.any {
+            ActivityCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
+        }
 
-            // ==== Run Native KNN Localization ====
-            val predictedPosition = modelInference.predictFromWifi(scanResults)
-            if (predictedPosition == null) {
-                Toast.makeText(this@NavigationActivity, "Could not determine location.", Toast.LENGTH_SHORT).show()
-                return@launch
-            }
+        if (missing) {
+            Log.i("NavigationActivity", "Requesting Wi-Fi/location permissions...")
+            permissionLauncher.launch(permissions)
+        } else {
+            startWifiScanning()
+        }
+    }
 
-            val (x, y) = predictedPosition
-            Log.d("NavigationActivity", "📍 Predicted position → x=$x , y=$y")
-            predictedText.text = "Current position: x=$x , y=$y"
-            Toast.makeText(this@NavigationActivity, "You are at x=$x, y=$y", Toast.LENGTH_SHORT).show()
-
-            // ===== Find nearest node to predicted position =====
-            val nearestNode = graphManager.findNearestNode(x, y)
-            if (nearestNode?.label == null) {
-                Toast.makeText(this@NavigationActivity, "No nearby node found.", Toast.LENGTH_SHORT).show()
-                return@launch
-            }
-
-            // ===== Draw Route =====
-            mapFragment.drawRoute(nearestNode.label, goalLabel)
-
-            // ===== Generate Instructions =====
-            val pathFinder = PathFinder(this@NavigationActivity)
-            val routeNodes: List<Node> = pathFinder.findPath(nearestNode.label, goalLabel)
-            if (routeNodes.isEmpty()) {
-                instructionText.text = "No valid route found."
-                return@launch
-            }
-
-            val instructions = InstructionGenerator.generateInstructions(this@NavigationActivity, routeNodes)
-            instructionText.text = instructions.joinToString("\n• ", prefix = "• ")
-
-            // ===== Reset Kalman & PDR to Predicted Location =====
-            pdrManager.resetTo(x.toDouble(), y.toDouble())
-            fusionManager.resetTo(x.toDouble(), y.toDouble())
-            mapFragment.updateUserPosition(x.toDouble(), y.toDouble())
-
-            // ===== Periodic Wi-Fi Corrections =====
-            lifecycleScope.launch(Dispatchers.IO) {
-                while (true) {
-                    delay(8000)
-                    wifiScanManager.startScan()
-                    delay(2500)
-                    val wifiResults = wifiScanManager.getScanResults()
-                    if (wifiResults.isNotEmpty()) {
-                        val correction = modelInference.predictFromWifi(wifiResults)
-                        correction?.let { (cx, cy) ->
-                            fusionManager.correct(cx.toDouble(), cy.toDouble())
-                            Log.d("NavigationActivity", "📡 Correction applied → x=$cx , y=$cy")
-                        }
-                    }
+    private fun startWifiScanning() {
+        Log.i("NavigationActivity", "📡 Starting periodic Wi-Fi scanning...")
+        scanRunnable = object : Runnable {
+            override fun run() {
+                if (ActivityCompat.checkSelfPermission(
+                        this@NavigationActivity,
+                        Manifest.permission.ACCESS_FINE_LOCATION
+                    ) != PackageManager.PERMISSION_GRANTED
+                ) {
+                    Log.e("NavigationActivity", "⚠️ No location permission; cannot scan.")
+                    return
                 }
+
+                val success = wifiManager.startScan()
+                if (!success) {
+                    Log.w("NavigationActivity", "⚠️ Failed to start Wi-Fi scan (maybe throttled).")
+                } else {
+                    Log.i("NavigationActivity", "📶 Wi-Fi scan started.")
+                }
+
+                handler.postDelayed(this, scanIntervalMs)
             }
         }
+
+        handler.post(scanRunnable!!)
+        registerReceiver(
+            WifiScanReceiver(::onWifiScanResults),
+            IntentFilter(WifiManager.SCAN_RESULTS_AVAILABLE_ACTION)
+        )
+    }
+
+    private fun onWifiScanResults(results: List<ScanResult>) {
+        if (results.isEmpty()) {
+            Log.w("NavigationActivity", "⚠️ Wi-Fi scan returned no results.")
+            return
+        }
+
+        Log.d("NavigationActivity", "Received ${results.size} Wi-Fi results.")
+        results.take(5).forEach {
+            Log.d("NavigationActivity", "➡️ ${it.SSID} (${it.BSSID}) = ${it.level} dBm")
+        }
+
+        val pred = modelInference.predictFromWifi(results)
+        if (pred == null) {
+            Log.e("NavigationActivity", "❌ Model inference failed.")
+            return
+        }
+
+        val predX = pred.first.toDouble()
+        val predY = pred.second.toDouble()
+
+        applyWifiCorrection(predX, predY)
+    }
+
+    private fun applyWifiCorrection(predX: Double, predY: Double) {
+        if (!fusion.isInitialized()) {
+            fusion.resetTo(predX, predY)
+            lastWifiCorrection = Pair(predX, predY)
+            Log.d("NavigationActivity", "Kalman initialized with Wi-Fi at ($predX,$predY)")
+        } else {
+            val last = lastWifiCorrection
+            val dist = if (last != null) hypot(predX - last.first, predY - last.second)
+            else Double.MAX_VALUE
+
+            if (dist > 0.25) { // 25 cm threshold for update
+                fusion.correct(predX, predY)
+                lastWifiCorrection = Pair(predX, predY)
+                Log.d(
+                    "NavigationActivity",
+                    "📡 Applied Wi-Fi correction ($predX,$predY), Δ=${"%.2f".format(dist)} m"
+                )
+            } else {
+                Log.d(
+                    "NavigationActivity",
+                    "⏸️ Skipped correction (Δ=${"%.2f".format(dist)} m, same position)"
+                )
+            }
+        }
+
+        val (x_m, y_m) = fusion.getPosition()
+        Log.d("NavigationActivity", "📍 Fused position now = ($x_m, $y_m)")
+        mapFragment.updateUserPosition(x_m, y_m)
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        wifiScanManager.stopScan()
+        scanRunnable?.let { handler.removeCallbacks(it) }
         modelInference.close()
-        pdrManager.stop()
-        headingManager.stop()
     }
 }

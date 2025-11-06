@@ -46,6 +46,9 @@ class LocationFusionManager {
         Log.d("Fusion", "Correction → ($x_meas, $y_meas) => state=(${state[0]}, ${state[1]})")
     }
 
+    fun isInitialized(): Boolean = initialized
+
+
     fun getPosition(): Pair<Double, Double> {
         return state[0] to state[1]
     }

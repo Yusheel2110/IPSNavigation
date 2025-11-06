@@ -3,39 +3,34 @@ package za.ac.ukzn.ipsnavigation.utils
 import android.content.Context
 import android.net.wifi.ScanResult
 import android.util.Log
-import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.InputStreamReader
 
 /**
- * Builds a normalized RSSI vector from live Wi-Fi scan results
- * using:
- * - bssid_map.json (BSSID -> column index)
- * - scaler_params.json (StandardScaler mean/std)
+ * Builds a raw RSSI vector from live Wi-Fi scan results.
+ * Option A: Use raw RSSI (no StandardScaler) to match referencepoints.csv KNN distances.
+ *
+ * The builder will accept a reference BSSID order from ModelInference (preferred).
+ * If none is provided it will attempt to load model/bssid_map.json as a fallback.
  */
 class FeatureVectorBuilder(private val context: Context) {
 
-    private val bssidOrder: List<String>
-    private val mean: List<Double>
-    private val scale: List<Double>
+    private var bssidOrder: List<String> = emptyList()
 
     init {
-        // === Load BSSID map ===
-        val bssidJson = loadJSONFromAsset("model/bssid_map.json")
-        val jsonObject = JSONObject(bssidJson)
-
-        // Keys = BSSIDs, values = indices
-        bssidOrder = jsonObject.keys().asSequence()
-            .sortedBy { jsonObject.getInt(it) }
-            .toList()
-        Log.i("FeatureVectorBuilder", "✅ Loaded ${bssidOrder.size} BSSIDs")
-
-        // === Load scaler parameters ===
-        val scalerJson = loadJSONFromAsset("model/scaler_params.json")
-        val params = JSONObject(scalerJson)
-        mean = params.getJSONArray("mean").let { arr -> List(arr.length()) { arr.getDouble(it) } }
-        scale = params.getJSONArray("scale").let { arr -> List(arr.length()) { arr.getDouble(it) } }
-        Log.i("FeatureVectorBuilder", "✅ Loaded scaler parameters (${mean.size} features)")
+        // Try to load a fallback map if available (non-fatal)
+        try {
+            val raw = loadJSONFromAsset("model/bssid_map.json")
+            // parse JSON map keys -> indices, sort by index
+            val json = org.json.JSONObject(raw)
+            bssidOrder = json.keys().asSequence()
+                .sortedBy { json.getInt(it) }
+                .map { it.lowercase() }
+                .toList()
+            Log.i("FeatureVectorBuilder", "✅ Fallback BSSID map loaded (${bssidOrder.size} BSSIDs)")
+        } catch (e: Exception) {
+            Log.w("FeatureVectorBuilder", "No fallback bssid_map.json found or failed to parse (this is OK).")
+        }
     }
 
     private fun loadJSONFromAsset(fileName: String): String {
@@ -47,28 +42,36 @@ class FeatureVectorBuilder(private val context: Context) {
     }
 
     /**
-     * Builds a normalized FloatArray feature vector
-     * matching the model’s training feature order.
+     * Called by ModelInference after reading CSV header to guarantee ordering match.
+     */
+    fun setReferenceBssidOrder(order: List<String>) {
+        bssidOrder = order.map { it.lowercase() }
+        Log.i("FeatureVectorBuilder", "📐 Reference BSSID order set (${bssidOrder.size})")
+    }
+
+    /**
+     * Build raw RSSI vector aligned to bssidOrder. Missing BSSIDs -> -100f.
      */
     fun buildVector(scanResults: List<ScanResult>): FloatArray {
-        val vector = FloatArray(bssidOrder.size) { -100f }
-
-        // Fill vector with observed RSSI values
-        for (result in scanResults) {
-            val idx = bssidOrder.indexOf(result.BSSID.lowercase())
-            if (idx != -1) {
-                vector[idx] = result.level.toFloat()
-            }
+        if (bssidOrder.isEmpty()) {
+            Log.w("FeatureVectorBuilder", "⚠️ bssidOrder is empty — buildVector will return empty array")
+            return FloatArray(0)
         }
 
-        // Normalize using StandardScaler formula
-        val normalized = FloatArray(vector.size)
-        for (i in vector.indices) {
-            normalized[i] = ((vector[i] - mean[i]) / scale[i]).toFloat()
+        val vector = FloatArray(bssidOrder.size) { -100f } // default for missing RSSI
+
+        // Map scan results by lowercased BSSID for fast lookup
+        val rssiMap = scanResults.associate { it.BSSID.lowercase() to it.level.toFloat() }
+
+        for (i in bssidOrder.indices) {
+            val bssid = bssidOrder[i]
+            rssiMap[bssid]?.let { rssi -> vector[i] = rssi }
         }
 
-        Log.d("FeatureVectorBuilder", "🔧 Vector built (sample: ${normalized.take(5)})")
-        return normalized
+        // Log a small sample for debugging (first 10 cols)
+        val sample = vector.take(10).joinToString(",")
+        Log.d("FeatureVectorBuilder", "🔧 Raw vector built (len=${vector.size}) sample: [$sample] scans=${scanResults.size}")
+        return vector
     }
 
     fun getFeatureCount(): Int = bssidOrder.size

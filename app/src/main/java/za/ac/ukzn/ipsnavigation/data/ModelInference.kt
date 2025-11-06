@@ -6,17 +6,20 @@ import android.util.Log
 import za.ac.ukzn.ipsnavigation.utils.FeatureVectorBuilder
 import java.io.BufferedReader
 import java.io.InputStreamReader
-import kotlin.math.pow
 import kotlin.math.sqrt
 
 /**
- * Native model inference for Wi-Fi localization.
- * Uses referencepoints.csv exported from Python to perform
- * weighted KNN regression on-device.
+ * Native model inference for Wi-Fi localization using weighted KNN on-device.
+ * Expects assets/model/referencepoints.csv with header:
+ *   bssid_1,bssid_2,...,x,y
  *
- * File structure expected:
- * assets/model/referencepoints.csv
- * columns: bssid_1,bssid_2,...,x,y
+ * Option A workflow:
+ * - Read header BSSID order from CSV (this is the canonical order).
+ * - Tell FeatureVectorBuilder to use that order (so Android matches CSV).
+ * - Use raw RSSI values (no scaling on Android) to compute euclidean distance.
+ *
+ * Extensive logging added to determine whether mismatch is on Android (ordering, missing BSSIDs)
+ * or on the training side (CSV column count, coordinate units).
  */
 class ModelInference(private val context: Context) {
 
@@ -25,36 +28,89 @@ class ModelInference(private val context: Context) {
     private val referenceCoords = mutableListOf<Pair<Double, Double>>()
     private val K = 3  // Number of nearest neighbors
 
+    // canonical bssid order read from CSV header (lowercased)
+    private val csvBssidOrder = mutableListOf<String>()
+
     init {
         loadReferenceData()
     }
 
-    /**
-     * Load the reference fingerprint database (from Python).
-     */
     private fun loadReferenceData() {
         try {
             val inputStream = context.assets.open("model/referencepoints.csv")
             val reader = BufferedReader(InputStreamReader(inputStream))
-            val header = reader.readLine()?.split(",") ?: return
+
+            val headerLine = reader.readLine()
+            if (headerLine == null) {
+                Log.e("ModelInference", "❌ referencepoints.csv header missing")
+                reader.close()
+                return
+            }
+
+            val header = headerLine.split(",").map { it.trim() }
+            if (header.size < 3) {
+                Log.e("ModelInference", "❌ referencepoints.csv header too short: $header")
+                reader.close()
+                return
+            }
+
             val numFeatures = header.size - 2
+            // first numFeatures cols are BSSID column names; store canonical order (lowercase)
+            csvBssidOrder.clear()
+            for (i in 0 until numFeatures) csvBssidOrder.add(header[i].lowercase())
+
+            Log.i("ModelInference", "📋 CSV header read. feature columns=$numFeatures bssids (sample): ${csvBssidOrder.take(10)}")
+
+            // inform FeatureVectorBuilder to use same ordering
+            featureBuilder.setReferenceBssidOrder(csvBssidOrder)
 
             var lineCount = 0
+            // optional: log first few rows for diagnostics
+            val previewRows = mutableListOf<String>()
+
             reader.forEachLine { line ->
                 val parts = line.split(",")
-                if (parts.size < numFeatures + 2) return@forEachLine
+                if (parts.size < numFeatures + 2) {
+                    Log.w("ModelInference", "⚠️ skipping malformed line (parts=${parts.size}): $line")
+                    return@forEachLine
+                }
 
-                val features = FloatArray(numFeatures) { i -> parts[i].toFloatOrNull() ?: -100f }
+                val features = FloatArray(numFeatures) { i ->
+                    parts[i].toFloatOrNull() ?: -100f
+                }
                 val x = parts[numFeatures].toDoubleOrNull() ?: 0.0
                 val y = parts[numFeatures + 1].toDoubleOrNull() ?: 0.0
 
                 referenceVectors.add(features)
                 referenceCoords.add(Pair(x, y))
+                if (lineCount < 5) previewRows.add(features.take(10).joinToString(",", prefix = "[", postfix = "]"))
                 lineCount++
             }
 
             reader.close()
             Log.i("ModelInference", "✅ Loaded $lineCount reference points from CSV")
+            if (previewRows.isNotEmpty()) {
+                Log.d("ModelInference", "Reference sample rows: ${previewRows.joinToString(" | ")}")
+            }
+
+            // Log coordinate ranges to detect normalized vs meters
+            if (referenceCoords.isNotEmpty()) {
+                val maxX = referenceCoords.maxOf { it.first }
+                val maxY = referenceCoords.maxOf { it.second }
+                val minX = referenceCoords.minOf { it.first }
+                val minY = referenceCoords.minOf { it.second }
+                Log.i("ModelInference", "Reference coords range x:[${minX}-${maxX}] y:[${minY}-${maxY}]")
+                if (maxX <= 1.1 && maxY <= 1.1) {
+                    Log.w("ModelInference", "⚠️ Reference coords appear normalized (0..1). Map expects meters — check training/export.")
+                }
+            }
+
+            // Sanity check: ensure every reference vector matches csvBssidOrder length
+            val mismatch = referenceVectors.any { it.size != csvBssidOrder.size }
+            if (mismatch) {
+                Log.e("ModelInference", "❌ Feature length mismatch between CSV header and reference rows")
+            }
+
         } catch (e: Exception) {
             Log.e("ModelInference", "❌ Failed to load referencepoints.csv", e)
         }
@@ -69,7 +125,22 @@ class ModelInference(private val context: Context) {
             return null
         }
 
+        // Build a raw RSSI vector using the CSV header order previously set in the featureBuilder
         val liveVector = featureBuilder.buildVector(scanResults)
+
+        // Diagnostic logs to determine where problem is
+        Log.d("ModelInference", "Scan results count=${scanResults.size}; liveVector len=${liveVector.size}. sample=${liveVector.take(10)}")
+        Log.d("ModelInference", "CSV BSSID count=${csvBssidOrder.size}; refVectorsCount=${referenceVectors.size}")
+
+        if (liveVector.isEmpty()) {
+            Log.e("ModelInference", "❌ liveVector empty — no bssid order available on Android or CSV order mismatch")
+            return null
+        }
+        if (liveVector.size != referenceVectors[0].size) {
+            Log.w("ModelInference", "⚠️ Feature length mismatch: live=${liveVector.size}, ref=${referenceVectors[0].size}")
+            // still continue (in case sizes match later) but this is a red flag
+        }
+
         val distances = mutableListOf<Pair<Double, Int>>()
 
         for (i in referenceVectors.indices) {
@@ -101,15 +172,21 @@ class ModelInference(private val context: Context) {
         val predX = (sumX / sumWeights).toFloat()
         val predY = (sumY / sumWeights).toFloat()
 
-        Log.d("ModelInference", "📍 Predicted Position -> x=$predX , y=$predY")
+        Log.d("ModelInference", "📍 Predicted Position -> x=$predX , y=$predY ; nearest dists=${nearest.map { String.format("%.2f", it.first) }}")
         return Pair(predX, predY)
     }
 
     private fun euclideanDistance(v1: FloatArray, v2: FloatArray): Double {
         var sum = 0.0
-        for (i in v1.indices) {
+        val len = minOf(v1.size, v2.size)
+        for (i in 0 until len) {
             val diff = (v1[i] - v2[i])
             sum += diff * diff
+        }
+        // if lengths differ, penalize difference (shouldn't happen if everything is aligned)
+        if (v1.size != v2.size) {
+            val diff = (v1.size - v2.size).toDouble()
+            sum += diff * diff * 1000.0
         }
         return sqrt(sum)
     }
@@ -117,5 +194,6 @@ class ModelInference(private val context: Context) {
     fun close() {
         referenceVectors.clear()
         referenceCoords.clear()
+        csvBssidOrder.clear()
     }
 }
