@@ -1,95 +1,131 @@
 package za.ac.ukzn.ipsnavigation.data
 
 import android.content.Context
-import android.hardware.*
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
 import android.util.Log
-import kotlin.math.*
+import kotlin.math.abs
+import kotlin.math.sqrt
 
 /**
- * Pedestrian Dead Reckoning (PDR) using accelerometer + rotation vector sensors.
- * Emits step deltas (Δx, Δy) for use in Kalman fusion.
+ * Pedestrian Dead Reckoning (PDR) Manager
+ * Detects steps and provides heading. It does not estimate position.
  */
-class PDRManager(context: Context) : SensorEventListener {
+class PDRManager(private val context: Context) : SensorEventListener {
 
-    private val sensorManager =
-        context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
-    private val accelSensor = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
-    private val rotationSensor = sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
+    // --- State -- -
+    var headingDeg: Double = 0.0
+    var stepCount: Int = 0
+    private var targetDirectionDeg: Double = -1.0
 
-    private val accelValues = FloatArray(3)
-    private val rotationMatrix = FloatArray(9)
-    private val orientation = FloatArray(3)
-
-    private var lastMagnitude = 0f
-    private var stepCount = 0
-    private var stepLength = 0.75f
-    private var threshold = 1.2f
+    // --- Step detection -- -
+    private var sensorManager: SensorManager? = null
+    private var accelValues = FloatArray(3)
     private var lastStepTime = 0L
+    private val stepLength = 0.75   // meters
+    private val stepThreshold = 13.5
+    private val minStepInterval = 800L // ms
 
-    var x = 0.0
-    var y = 0.0
-    var headingDeg = 0.0
+    // --- Heading integration -- -
+    private lateinit var headingManager: HeadingManager
 
-    private var lastX = 0.0
-    private var lastY = 0.0
-    private var onStepCallback: ((Double, Double) -> Unit)? = null
+    // --- Optional callback for live updates -- -
+    // Callback provides: stepLength, ignored (0.0), heading
+    private var stepListener: ((Double, Double, Double) -> Unit)? = null
 
-    fun start(onStep: (Double, Double) -> Unit) {
-        onStepCallback = onStep
-        sensorManager.registerListener(this, accelSensor, SensorManager.SENSOR_DELAY_UI)
-        sensorManager.registerListener(this, rotationSensor, SensorManager.SENSOR_DELAY_UI)
+    // =====================================================
+    // Public API
+    // =====================================================
+
+    fun start(onStep: ((stepLength: Double, y: Double, heading: Double) -> Unit)? = null) {
+        stepListener = onStep
+        sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
+
+        sensorManager?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)?.let {
+            sensorManager?.registerListener(this, it, SensorManager.SENSOR_DELAY_UI)
+        }
+
+        headingManager = HeadingManager(
+            context,
+            onHeadingUpdate = { heading ->
+                headingDeg = heading.toDouble()
+            },
+            enableLogging = true
+        )
+        headingManager.start()
     }
 
     fun stop() {
-        sensorManager.unregisterListener(this)
+        sensorManager?.unregisterListener(this)
+        headingManager.stop()
+        sensorManager = null
+        stepListener = null
     }
 
-    override fun onSensorChanged(event: SensorEvent) {
-        when (event.sensor.type) {
-            Sensor.TYPE_ACCELEROMETER -> handleAccelerometer(event)
-            Sensor.TYPE_ROTATION_VECTOR -> handleRotation(event)
-        }
-    }
-
-    override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
-
-    private fun handleAccelerometer(event: SensorEvent) {
-        System.arraycopy(event.values, 0, accelValues, 0, 3)
-        val magnitude = sqrt(accelValues[0].pow(2) + accelValues[1].pow(2) + accelValues[2].pow(2))
-        val now = System.currentTimeMillis()
-
-        if (magnitude - lastMagnitude > threshold && now - lastStepTime > 300) {
-            stepCount++
-            lastStepTime = now
-            updatePosition()
-        }
-        lastMagnitude = magnitude
-    }
-
-    private fun handleRotation(event: SensorEvent) {
-        SensorManager.getRotationMatrixFromVector(rotationMatrix, event.values)
-        SensorManager.getOrientation(rotationMatrix, orientation)
-        headingDeg = Math.toDegrees(orientation[0].toDouble())
-        if (headingDeg < 0) headingDeg += 360.0
-    }
-
-    private fun updatePosition() {
-        val headingRad = Math.toRadians(headingDeg)
-        x += stepLength * sin(headingRad)
-        y += stepLength * cos(headingRad)
-        val deltaX = x - lastX
-        val deltaY = y - lastY
-        lastX = x
-        lastY = y
-        Log.d("PDR", "Step $stepCount → Δx=$deltaX, Δy=$deltaY, heading=$headingDeg°")
-        onStepCallback?.invoke(deltaX, deltaY)
-    }
-
-    fun resetTo(x_m: Double, y_m: Double) {
-        x = x_m
-        y = y_m
-        lastX = x_m
-        lastY = y_m
+    /**
+     * Resets the internal step counter. PDRManager does not track X/Y position.
+     */
+    fun resetTo() {
         stepCount = 0
+        // The HeadingManager resets its own filters internally.
     }
+
+    fun setTargetDirection(deg: Double) {
+        targetDirectionDeg = deg
+    }
+
+    // =====================================================
+    // Sensor Handling
+    // =====================================================
+
+    override fun onSensorChanged(event: SensorEvent?) {
+        if (event?.sensor?.type == Sensor.TYPE_ACCELEROMETER) {
+            accelValues = event.values.clone()
+            detectStep(accelValues)
+        }
+    }
+
+    override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
+
+    // =====================================================
+    // Step Detection Logic
+    // =====================================================
+
+    private fun detectStep(accel: FloatArray) {
+        val magnitude = sqrt(accel[0] * accel[0] + accel[1] * accel[1] + accel[2] * accel[2])
+        val now = System.currentTimeMillis()
+        Log.d("PDR_DEBUG", "Step #$stepCount detected at ${System.currentTimeMillis()} ms, mag=${"%.2f".format(magnitude)}")
+
+
+        if (magnitude > stepThreshold && (now - lastStepTime) > minStepInterval) {
+            lastStepTime = now
+
+            // --- Apply map alignment offset for heading check ---
+            val mapHeadingOffset = 133.0 // From graph.json: north_angle_deg
+            val alignedHeading = (headingDeg + mapHeadingOffset) % 360
+
+            // Check if step direction is valid against the current route corridor
+            if (targetDirectionDeg != -1.0) {
+                val diff = ((alignedHeading - targetDirectionDeg + 540) % 360) - 180
+                if (abs(diff) > 45) {
+                    Log.d("PDRManager", "Step ignored due to heading. Diff: ${abs(diff).toInt()}°")
+                    return // Step is not in the target direction, so ignore it.
+                }
+            }
+            
+            stepCount++
+            Log.d("PDRManager", "Step #$stepCount detected. Heading: ${"%.1f".format(headingDeg)}°")
+            
+            // Invoke listener with constant step length and current heading.
+            // The second parameter (Y) is always 0.0 as PDRManager does not track position.
+            stepListener?.invoke(stepLength, 0.0, headingDeg)
+        }
+    }
+    
+    // =====================================================
+    // Getter
+    // =====================================================
+    fun getHeading(): Double = headingDeg
 }

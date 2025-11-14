@@ -6,18 +6,16 @@ import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.util.Log
-import kotlin.math.roundToInt
+import kotlin.math.abs
 
 /**
- * HeadingManager — provides smooth, accurate compass heading using the
- * fused Rotation Vector sensor. Works well on Huawei P20 Pro and similar devices.
- *
- * You can call start() to begin listening, and it will deliver heading updates (0–360°)
- * via the callback onHeadingUpdate().
+ * HeadingManager — smooth, throttled heading updates.
+ * Only triggers when heading changes more than 45°.
  */
 class HeadingManager(
     private val context: Context,
-    private val onHeadingUpdate: (Float) -> Unit
+    private val onHeadingUpdate: (Float) -> Unit,
+    private val enableLogging: Boolean = false
 ) : SensorEventListener {
 
     private val sensorManager =
@@ -25,27 +23,34 @@ class HeadingManager(
 
     private var currentHeading = 0f
     private var offset = 0f
+    private var lastAccuracy = SensorManager.SENSOR_STATUS_ACCURACY_HIGH
+    private var lastUpdateTime = 0L
 
-    /** Start listening to the rotation vector sensor. */
+    /** Start listening to rotation vector sensor. */
     fun start() {
         val rotationSensor = sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
         if (rotationSensor != null) {
             sensorManager.registerListener(this, rotationSensor, SensorManager.SENSOR_DELAY_UI)
-            Log.i("HeadingManager", "Rotation Vector sensor registered.")
+            Log.i("HeadingManager", "🧭 HeadingManager started.")
         } else {
-            Log.e("HeadingManager", "Rotation Vector Sensor not available on this device.")
+            Log.e("HeadingManager", "❌ Rotation Vector Sensor not available")
         }
     }
 
-    /** Stop listening. */
+    /** Stop listening to sensors. */
     fun stop() {
         sensorManager.unregisterListener(this)
+        Log.i("HeadingManager", "🧭 HeadingManager stopped.")
     }
 
-    /** Sets the current heading as a zero reference (optional). */
+    /** Set current heading as zero reference. */
     fun zero() {
         offset = currentHeading
-        Log.d("HeadingManager", "Compass zeroed at $offset°")
+    }
+
+    /** Add a value to the current offset. */
+    fun addOffset(deltaDeg: Float) {
+        offset = (offset + deltaDeg + 360f) % 360f
     }
 
     override fun onSensorChanged(event: SensorEvent) {
@@ -56,23 +61,26 @@ class HeadingManager(
         SensorManager.getRotationMatrixFromVector(rotationMatrix, event.values)
         SensorManager.getOrientation(rotationMatrix, orientationVals)
 
-        // Convert azimuth (radians) → degrees
         var azimuth = Math.toDegrees(orientationVals[0].toDouble()).toFloat()
         azimuth = (azimuth + 360) % 360
-
-        // Apply zero offset + smoothing
         val adjusted = ((azimuth - offset + 360) % 360)
-        currentHeading = 0.9f * currentHeading + 0.1f * adjusted
 
-        onHeadingUpdate(currentHeading)
+        val now = System.currentTimeMillis()
+        val diff = abs(adjusted - currentHeading)
+
+        // only trigger if change > 45° or more than 500ms since last update
+        if (diff > 45f || now - lastUpdateTime > 500) {
+            currentHeading = adjusted
+            lastUpdateTime = now
+            if (enableLogging) Log.d("HeadingManager", "🧭 Heading changed to %.1f°".format(currentHeading))
+            onHeadingUpdate(currentHeading)
+        }
     }
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {
-        if (accuracy == SensorManager.SENSOR_STATUS_UNRELIABLE) {
-            Log.w(
-                "HeadingManager",
-                "Compass accuracy low — move phone in a figure-8 motion to recalibrate."
-            )
+        lastAccuracy = accuracy
+        if (accuracy == SensorManager.SENSOR_STATUS_UNRELIABLE && enableLogging) {
+            Log.w("HeadingManager", "⚠️ Compass accuracy low — move device in figure 8.")
         }
     }
 }

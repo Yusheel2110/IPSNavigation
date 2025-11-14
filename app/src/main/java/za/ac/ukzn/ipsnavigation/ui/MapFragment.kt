@@ -4,18 +4,21 @@ import android.graphics.*
 import android.os.Bundle
 import android.util.Log
 import android.view.*
-import android.widget.FrameLayout
 import android.widget.ImageButton
+import android.widget.TextView
 import android.widget.Toast
 import androidx.fragment.app.Fragment
 import za.ac.ukzn.ipsnavigation.R
 import za.ac.ukzn.ipsnavigation.data.GraphManager
+import za.ac.ukzn.ipsnavigation.data.PDRManager
 import za.ac.ukzn.ipsnavigation.data.PathFinder
 import za.ac.ukzn.ipsnavigation.models.Node
 import kotlin.math.*
 
 /**
- * MapFragment with zoom/pan, rerouting, and now compass-based heading arrow overlay.
+ * MapFragment — PDR-only mode with Kalman smoothing + eased translation + smooth arrow rotation.
+ * The user dot glides smoothly along the red route and the arrow rotates naturally.
+ * Arrow is hidden by default until "Where Am I?" or route chosen.
  */
 class MapFragment : Fragment() {
 
@@ -23,28 +26,57 @@ class MapFragment : Fragment() {
     private lateinit var recenterButton: ImageButton
     private lateinit var graphManager: GraphManager
     private lateinit var pathFinder: PathFinder
+    lateinit var pdrManager: PDRManager
 
     private lateinit var baseFloorplan: Bitmap
     private var currentBitmap: Bitmap? = null
     private var routePath: List<Node>? = null
 
+    // User position + heading
     private var currentXpx = 0f
     private var currentYpx = 0f
-    private var currentHeading = 0f
+    private var currentHeading = 0f       // display heading (smoothed)
+    private var targetHeading = 0f        // last sensor heading
+    private var lastRedrawTime = 0L
+    private var arrowVisible = false      // hidden by default
 
-    private var lastGoalLabel: String? = null
+    // Path progress
+    private var currentEdgeIndex = 0
+    private var progressOnEdge = 0.0
 
+    // Step + animation config
+    private val stepLength = 0.0005
+    private val animationDuration = 350L
+
+    // Conversion constants
+    private val pxPerMeter = 104.03
+    private val imgHeight = 2000.0
+    private val offsetXMeters = 1.1
+    private val offsetYMeters = 7.5
+
+    // Light Kalman filters for pixel smoothing
+    private val kalmanX = KalmanFilter(q = 0.02, r = 0.5)
+    private val kalmanY = KalmanFilter(q = 0.02, r = 0.5)
+
+    // Rotation smoothing parameters
+    private val headingSmoothingFactor = 0.15f // smaller = slower turn, 0.15–0.25 feels natural
+
+    // ============================================================
+    //  Lifecycle
+    // ============================================================
     override fun onCreateView(
-        inflater: LayoutInflater, container: ViewGroup?,
-        savedInstanceState: Bundle?
+        inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?
     ): View {
         val root = inflater.inflate(R.layout.fragment_map, container, false)
         mapView = root.findViewById(R.id.zoomableMap)
         recenterButton = root.findViewById(R.id.recenterButton)
+        val debugOverlay: TextView = root.findViewById(R.id.debugOverlay)
 
         graphManager = GraphManager.getInstance(requireContext())
         if (!graphManager.isLoaded()) graphManager.loadGraphFromAssets()
         pathFinder = PathFinder(requireContext())
+        pdrManager = PDRManager(requireContext())
+        pdrManager.start { stepLength, _, heading -> onStepTaken(stepLength, heading) }
 
         loadFloorplan()
 
@@ -56,109 +88,163 @@ class MapFragment : Fragment() {
         return root
     }
 
+    // ============================================================
+    //  Step-based motion along route
+    // ============================================================
+    fun onStepTaken(stepLength: Double, heading: Double) {
+        val path = routePath ?: return
+        if (currentEdgeIndex >= path.size - 1) return
+
+        val start = path[currentEdgeIndex]
+        val end = path[currentEdgeIndex + 1]
+        val edgeLen = hypot(end.x_m - start.x_m, end.y_m - start.y_m)
+        if (edgeLen <= 0.0) return
+
+        progressOnEdge += stepLength / edgeLen
+
+        if (progressOnEdge >= 1.0) {
+            currentEdgeIndex++
+            progressOnEdge = 0.0
+            if (currentEdgeIndex >= path.size - 1) {
+                Log.d("TRACK", "✅ Reached destination.")
+                return
+            }
+        }
+
+        val s = path[currentEdgeIndex]
+        val e = path[currentEdgeIndex + 1]
+        val x = s.x_m + (e.x_m - s.x_m) * progressOnEdge
+        val y = s.y_m + (e.y_m - s.y_m) * progressOnEdge
+
+        animateUserTo(x, y)
+    }
+
+    // ============================================================
+    //  Smooth animation + Kalman filtering
+    // ============================================================
+    private fun animateUserTo(x_m: Double, y_m: Double) {
+        val (targetX, targetY) = toPx(x_m, y_m)
+        val startX = currentXpx
+        val startY = currentYpx
+        val startTime = System.currentTimeMillis()
+
+        mapView.post(object : Runnable {
+            override fun run() {
+                val elapsed = System.currentTimeMillis() - startTime
+                var t = (elapsed.toFloat() / animationDuration).coerceIn(0f, 1f)
+                t = ((1 - cos(t * Math.PI)) / 2.0f).toFloat() // cosine easing
+
+                val rawX = startX + (targetX - startX) * t
+                val rawY = startY + (targetY - startY) * t
+
+                currentXpx = kalmanX.update(rawX.toDouble()).toFloat()
+                currentYpx = kalmanY.update(rawY.toDouble()).toFloat()
+
+                smoothHeading()
+                if (arrowVisible) redrawMap()
+                if (t < 1f) mapView.postDelayed(this, 16L)
+            }
+        })
+    }
+
+    // ============================================================
+    //  Heading smoothing
+    // ============================================================
+    fun updateUserHeading(headingDeg: Float) {
+        targetHeading = headingDeg
+        if (arrowVisible) {
+            smoothHeading()
+            val now = System.currentTimeMillis()
+            if (now - lastRedrawTime > 100) {
+                lastRedrawTime = now
+                redrawMap()
+            }
+        }
+    }
+
+    private fun smoothHeading() {
+        val diff = ((targetHeading - currentHeading + 540f) % 360f) - 180f
+        currentHeading = (currentHeading + headingSmoothingFactor * diff + 360f) % 360f
+    }
+
+    // ============================================================
+    //  Drawing
+    // ============================================================
     private fun loadFloorplan() {
         val input = requireContext().assets.open("floorplan.png")
         baseFloorplan = BitmapFactory.decodeStream(input)
         currentBitmap = baseFloorplan.copy(Bitmap.Config.ARGB_8888, true)
         mapView.setImageBitmap(currentBitmap)
-        Log.d("MapFragment", "Floorplan loaded.")
+        Log.d("MapFragment", "✅ Floorplan loaded.")
     }
 
-    private fun toPx(nodeX: Double, nodeY: Double): Pair<Float, Float> {
-        val meta = graphManager.getMetadata()
-        val pxPerMeter = meta.scale?.px_per_meter ?: 100.0
-        val imgHeight = meta.image_size_px?.height ?: 2000
-        val xOff = meta.alignment_offsets_m?.x ?: 0.0
-        val yOff = meta.alignment_offsets_m?.y ?: 0.0
-        val px = (nodeX + xOff) * pxPerMeter
-        val py = imgHeight - ((nodeY + yOff) * pxPerMeter)
+    private fun toPx(x_m: Double, y_m: Double): Pair<Float, Float> {
+        val px = (x_m + offsetXMeters) * pxPerMeter
+        val py = imgHeight - ((y_m + offsetYMeters) * pxPerMeter)
         return Pair(px.toFloat(), py.toFloat())
     }
 
     fun drawRoute(startLabel: String, goalLabel: String) {
-        lastGoalLabel = goalLabel
-        val path = pathFinder.findPath(startLabel, goalLabel)
-        if (path.isEmpty()) return
-        routePath = path
-
-        val mutable = baseFloorplan.copy(Bitmap.Config.ARGB_8888, true)
-        val canvas = Canvas(mutable)
-        val paint = Paint().apply {
-            color = Color.RED
-            strokeWidth = 8f
-            style = Paint.Style.STROKE
-            isAntiAlias = true
+        routePath = pathFinder.findPath(startLabel, goalLabel)
+        if (routePath.isNullOrEmpty()) {
+            Log.w("MapFragment", "No route found from $startLabel to $goalLabel")
+            return
         }
-
-        for (i in 0 until path.size - 1) {
-            val (x1, y1) = toPx(path[i].x_m, path[i].y_m)
-            val (x2, y2) = toPx(path[i + 1].x_m, path[i + 1].y_m)
-            canvas.drawLine(x1, y1, x2, y2, paint)
-        }
-
-        mapView.setImageBitmap(mutable)
-        currentBitmap = mutable
+        currentEdgeIndex = 0
+        progressOnEdge = 0.0
+        kalmanX.reset()
+        kalmanY.reset()
+        arrowVisible = true
+        fadeInArrow()
+        redrawMap()
+        Log.d("MapFragment", "🗺️ Route drawn ($startLabel → $goalLabel)")
     }
 
     fun updateUserPosition(x_m: Double, y_m: Double) {
         val (xpx, ypx) = toPx(x_m, y_m)
         currentXpx = xpx
         currentYpx = ypx
-        redrawMap()
-        checkOffRoute(x_m, y_m)
-    }
-
-    /** Called from NavigationActivity → HeadingManager updates */
-    /** Called from NavigationActivity → HeadingManager updates */
-    fun updateUserHeading(headingDeg: Float) {
-        // Apply smoothing for gradual rotation (0.1 = slower, 0.3 = faster)
-        val diff = ((headingDeg - currentHeading + 540) % 360) - 180
-        currentHeading = (currentHeading + diff * 0.15f + 360) % 360
+        arrowVisible = true
+        fadeInArrow()
         redrawMap()
     }
 
-
-    /** Redraws map overlay with user position + heading arrow. */
     private fun redrawMap() {
         val updated = baseFloorplan.copy(Bitmap.Config.ARGB_8888, true)
         val canvas = Canvas(updated)
 
         // Draw route
         routePath?.let { path ->
-            val routePaint = Paint().apply {
+            val paint = Paint().apply {
                 color = Color.RED
                 strokeWidth = 8f
                 style = Paint.Style.STROKE
                 isAntiAlias = true
             }
             for (i in 0 until path.size - 1) {
-                val (x1, y1) = toPx(path[i].x_m, path[i].y_m)
-                val (x2, y2) = toPx(path[i + 1].x_m, path[i + 1].y_m)
-                canvas.drawLine(x1, y1, x2, y2, routePaint)
+                val (rx1, ry1) = toPx(path[i].x_m, path[i].y_m)
+                val (rx2, ry2) = toPx(path[i + 1].x_m, path[i + 1].y_m)
+                canvas.drawLine(rx1, ry1, rx2, ry2, paint)
             }
         }
 
-        // Draw user marker (circle)
-        val userPaint = Paint().apply {
-            color = Color.CYAN
-            style = Paint.Style.FILL
-            isAntiAlias = true
+        if (arrowVisible) {
+            val userPaint = Paint().apply {
+                color = Color.CYAN
+                style = Paint.Style.FILL
+                isAntiAlias = true
+            }
+            canvas.drawCircle(currentXpx, currentYpx, 18f, userPaint)
+            drawHeadingArrow(canvas)
         }
-        canvas.drawCircle(currentXpx, currentYpx, 18f, userPaint)
-
-        // Draw heading arrow (triangle)
-        drawHeadingArrow(canvas)
 
         mapView.setImageBitmap(updated)
         currentBitmap = updated
     }
 
-    /** Draws a small arrow showing current heading direction */
     private fun drawHeadingArrow(canvas: Canvas) {
         val arrowLength = 45f
         val angleRad = Math.toRadians(currentHeading.toDouble())
-
-        // Triangle points
         val tipX = currentXpx + arrowLength * sin(angleRad).toFloat()
         val tipY = currentYpx - arrowLength * cos(angleRad).toFloat()
         val leftX = currentXpx - 15 * cos(angleRad).toFloat()
@@ -173,48 +259,84 @@ class MapFragment : Fragment() {
             close()
         }
 
-        val arrowPaint = Paint().apply {
+        val paint = Paint().apply {
             color = Color.BLUE
             style = Paint.Style.FILL
             isAntiAlias = true
         }
-
-        canvas.drawPath(path, arrowPaint)
+        canvas.drawPath(path, paint)
     }
 
-    private fun checkOffRoute(x_m: Double, y_m: Double) {
-        val path = routePath ?: return
-        var minDist = Double.MAX_VALUE
-        for (i in 0 until path.size - 1) {
-            val a = path[i]
-            val b = path[i + 1]
-            val dist = pointToSegmentDistance(x_m, y_m, a.x_m, a.y_m, b.x_m, b.y_m)
-            minDist = minOf(minDist, dist)
-        }
+    // ============================================================
+    //  Helpers
+    // ============================================================
+    fun getRoutePath(): List<Node>? = routePath
 
-        if (minDist > 2.0 && lastGoalLabel != null) {
-            val nearest = graphManager.getAllNodes().minByOrNull {
-                hypot(it.x_m - x_m, it.y_m - y_m)
-            }
-            nearest?.label?.let { newStart ->
-                drawRoute(newStart, lastGoalLabel!!)
-            }
-        }
+    fun snapToStartNode(startNode: Node) {
+        updateUserPosition(startNode.x_m, startNode.y_m)
+        currentEdgeIndex = 0
+        progressOnEdge = 0.0
+        kalmanX.reset()
+        kalmanY.reset()
+        currentHeading = 0f
+        targetHeading = 0f
+        arrowVisible = true
+        fadeInArrow()
+        Log.d("MapFragment", "📍 Snapped to start node ${startNode.label}")
     }
 
-    private fun pointToSegmentDistance(
-        x: Double, y: Double,
-        x1: Double, y1: Double,
-        x2: Double, y2: Double
-    ): Double {
-        val dx = x2 - x1
-        val dy = y2 - y1
-        if (dx == 0.0 && dy == 0.0) return hypot(x - x1, y - y1)
-        val t = ((x - x1) * dx + (y - y1) * dy) / (dx * dx + dy * dy)
-        return when {
-            t < 0 -> hypot(x - x1, y - y1)
-            t > 1 -> hypot(x - x2, y - y2)
-            else -> hypot(x - (x1 + t * dx), y - (y1 + t * dy))
+    private fun fadeInArrow() {
+        mapView.alpha = 0f
+        mapView.animate().alpha(1f).setDuration(600).start()
+    }
+
+    // ============================================================
+    //  Clear route + get last known position (for "Current Location")
+    // ============================================================
+    fun clearRoute() {
+        routePath = null
+        currentEdgeIndex = 0
+        progressOnEdge = 0.0
+        kalmanX.reset()
+        kalmanY.reset()
+        redrawMap()
+        Log.d("MapFragment", "🧹 Cleared previous route.")
+    }
+
+    fun getCurrentPositionMeters(): Pair<Double, Double>? {
+        if (currentXpx == 0f && currentYpx == 0f) return null
+        val x_m = (currentXpx / pxPerMeter) - offsetXMeters
+        val y_m = ((imgHeight - currentYpx) / pxPerMeter) - offsetYMeters
+        return Pair(x_m, y_m)
+    }
+
+    fun simulateStep() {
+        onStepTaken(stepLength, targetHeading.toDouble())
+    }
+}
+
+// ============================================================
+//  Lightweight 1D Kalman Filter for pixel smoothing
+// ============================================================
+class KalmanFilter(private val q: Double, private val r: Double) {
+    private var x = 0.0
+    private var p = 1.0
+    private var initialized = false
+
+    fun update(measurement: Double): Double {
+        if (!initialized) {
+            x = measurement
+            initialized = true
         }
+        p += q
+        val k = p / (p + r)
+        x += k * (measurement - x)
+        p *= (1 - k)
+        return x
+    }
+
+    fun reset() {
+        p = 1.0
+        initialized = false
     }
 }

@@ -21,7 +21,6 @@ class FeatureVectorBuilder(private val context: Context) {
         // Try to load a fallback map if available (non-fatal)
         try {
             val raw = loadJSONFromAsset("model/bssid_map.json")
-            // parse JSON map keys -> indices, sort by index
             val json = org.json.JSONObject(raw)
             bssidOrder = json.keys().asSequence()
                 .sortedBy { json.getInt(it) }

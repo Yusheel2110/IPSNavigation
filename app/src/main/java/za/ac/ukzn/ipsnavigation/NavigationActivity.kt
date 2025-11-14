@@ -1,187 +1,210 @@
-package za.ac.ukzn.ipsnavigation.ui
+package za.ac.ukzn.ipsnavigation
 
-import android.Manifest
-import android.content.IntentFilter
-import android.content.pm.PackageManager
-import android.net.wifi.ScanResult
-import android.net.wifi.WifiManager
-import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
+import android.os.*
 import android.util.Log
-import androidx.activity.result.contract.ActivityResultContracts
+import android.view.View
+import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
-import androidx.core.app.ActivityCompat
-import za.ac.ukzn.ipsnavigation.R
-import za.ac.ukzn.ipsnavigation.data.LocationFusionManager
-import za.ac.ukzn.ipsnavigation.data.ModelInference
+import za.ac.ukzn.ipsnavigation.data.GraphManager
+import za.ac.ukzn.ipsnavigation.data.HeadingManager
+import za.ac.ukzn.ipsnavigation.data.PDRManager
+import za.ac.ukzn.ipsnavigation.models.Node
+import za.ac.ukzn.ipsnavigation.ui.MapFragment
 import kotlin.math.hypot
+import kotlin.random.Random
 
 /**
- * NavigationActivity
- * -------------------------------------------------------
- * Controls on-device Wi-Fi localization and map updates.
- * Uses:
- *  - ModelInference (raw RSSI → KNN)
- *  - LocationFusionManager (Kalman)
- *  - MapFragment (already in layout)
+ * NavigationActivity — PDR-only mode with “Where Am I?”
+ * ------------------------------------------------------------
+ * - Press "Where Am I?" to snap to the next fake coordinate
+ * - Coordinates are cycled through sequentially from a predefined list
+ * - Clears any existing route before snapping
+ * ------------------------------------------------------------
  */
 class NavigationActivity : AppCompatActivity() {
 
-    private lateinit var wifiManager: WifiManager
-    private lateinit var modelInference: ModelInference
-    private lateinit var fusion: LocationFusionManager
     private lateinit var mapFragment: MapFragment
+    private lateinit var graphManager: GraphManager
+    private lateinit var pdrManager: PDRManager
+    private lateinit var headingManager: HeadingManager
 
-    private val handler = Handler(Looper.getMainLooper())
-    private var lastWifiCorrection: Pair<Double, Double>? = null
+    // UI
+    private lateinit var startSpinner: Spinner
+    private lateinit var destSpinner: Spinner
+    private lateinit var navigateButton: Button
+    private lateinit var locateButton: Button
+    private lateinit var loadingOverlay: LinearLayout
+    private lateinit var loadingText: TextView
+    private lateinit var predictedTextView: TextView
+    private lateinit var instructionTextView: TextView
 
-    private val scanIntervalMs = 8000L
-    private var scanRunnable: Runnable? = null
+    // Fake Wi-Fi coordinate list (simulate sequential localization results)
+    private val fakeLocations = listOf(
+        Pair(3.5, 5.0),   // Near 1-01
+        Pair(15.8, 5.0),   // Between 1-01 and 1-02
+        Pair(6.0, 2.0),   // Mid-corridor left
+        Pair(10.5, 2.5),  // Near 1-05 elevator
+        Pair(14.0, 3.0),  // Mid-top corridor
+        Pair(19.0, 3.0),  // Near 1-08
+        Pair(24.5, 3.2),  // Near 1-10
+        Pair(26.5, 1.0),  // Turning corner
+        Pair(25.0, -1.5), // Down the right wing
+        Pair(21.0, -2.5), // Near 1-12
+        Pair(17.5, -2.8), // Approaching 1-13
+        Pair(14.0, -3.5)  // End of hall
+    )
 
-    // Permissions launcher
-    private val permissionLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestMultiplePermissions()
-    ) { permissions ->
-        val granted = permissions.all { it.value }
-        if (granted) {
-            startWifiScanning()
-        } else {
-            Log.e("NavigationActivity", "❌ Location/Wi-Fi permissions denied.")
-        }
-    }
+    private var fakeIndex = 0 // track which fake position to use next
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_navigation)
 
-        wifiManager = applicationContext.getSystemService(WIFI_SERVICE) as WifiManager
-        modelInference = ModelInference(this)
-        fusion = LocationFusionManager()
+        graphManager = GraphManager.getInstance(this)
+        if (!graphManager.isLoaded()) graphManager.loadGraphFromAssets()
 
-        // 🔹 Get MapFragment directly from XML layout
-        val existing = supportFragmentManager.findFragmentById(R.id.mapFragmentContainer)
-        if (existing != null && existing is MapFragment) {
-            mapFragment = existing
-            Log.d("NavigationActivity", "🗺️ Using existing MapFragment from layout.")
-        } else {
-            Log.e("NavigationActivity", "❌ MapFragment not found in layout (id: mapFragmentContainer).")
-            mapFragment = MapFragment()
+        // ===== UI refs =====
+        startSpinner = findViewById(R.id.startNodeSpinner)
+        destSpinner = findViewById(R.id.destinationSpinner)
+        navigateButton = findViewById(R.id.navigateButton)
+        locateButton = findViewById(R.id.locateButton)
+        loadingOverlay = findViewById(R.id.loadingOverlay)
+        loadingText = findViewById(R.id.loadingText)
+        predictedTextView = findViewById(R.id.predictedTextView)
+        instructionTextView = findViewById(R.id.instructionTextView)
+
+        // ===== Map fragment =====
+        val frag = supportFragmentManager.findFragmentById(R.id.mapFragmentContainer)
+        mapFragment = if (frag is MapFragment) frag else MapFragment().also {
+            supportFragmentManager.beginTransaction()
+                .replace(R.id.mapFragmentContainer, it)
+                .commit()
         }
 
-        requestPermissionsIfNeeded()
-    }
+        setupNodeSpinners()
+        setupButtons()
 
-    // 🔹 Check and request permissions
-    private fun requestPermissionsIfNeeded() {
-        val permissions = arrayOf(
-            Manifest.permission.ACCESS_FINE_LOCATION,
-            Manifest.permission.ACCESS_WIFI_STATE,
-            Manifest.permission.CHANGE_WIFI_STATE
+        headingManager = HeadingManager(
+            context = this,
+            onHeadingUpdate = { heading -> mapFragment.updateUserHeading(heading) },
+            enableLogging = false
         )
 
-        val missing = permissions.any {
-            ActivityCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
-        }
-
-        if (missing) {
-            Log.i("NavigationActivity", "Requesting Wi-Fi/location permissions...")
-            permissionLauncher.launch(permissions)
-        } else {
-            startWifiScanning()
-        }
+        pdrManager = PDRManager(this)
+        startSensorManagers()
     }
 
-    // 🔹 Schedule periodic Wi-Fi scans
-    private fun startWifiScanning() {
-        Log.i("NavigationActivity", "📡 Starting periodic Wi-Fi scanning...")
-        scanRunnable = object : Runnable {
-            override fun run() {
-                if (ActivityCompat.checkSelfPermission(
-                        this@NavigationActivity,
-                        Manifest.permission.ACCESS_FINE_LOCATION
-                    ) != PackageManager.PERMISSION_GRANTED
-                ) {
-                    Log.e("NavigationActivity", "⚠️ No location permission; cannot scan.")
-                    return
-                }
+    // ============================================================
+    // Populate dropdowns
+    // ============================================================
+    private fun setupNodeSpinners() {
+        val nodes = graphManager.getAllNodes().mapNotNull { it.label }.sortedBy { it.lowercase() }
+        val listWithCurrent = listOf("Current Location") + nodes
+        val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, listWithCurrent)
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        startSpinner.adapter = adapter
 
-                val success = wifiManager.startScan()
-                if (!success) {
-                    Log.w("NavigationActivity", "⚠️ Failed to start Wi-Fi scan (may be throttled).")
+        val destAdapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, nodes)
+        destAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        destSpinner.adapter = destAdapter
+    }
+
+    // ============================================================
+    // Handle buttons
+    // ============================================================
+    private fun setupButtons() {
+
+        // ---------- Locate & Go ----------
+        navigateButton.setOnClickListener {
+            val startLabel = startSpinner.selectedItem?.toString()
+            val destLabel = destSpinner.selectedItem?.toString()
+
+            if (destLabel.isNullOrEmpty()) {
+                Toast.makeText(this, "Select a destination.", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+
+            // Always clear old route before drawing
+            mapFragment.clearRoute()
+
+            var actualStartNode: Node? = null
+
+            if (startLabel == "Current Location") {
+                val lastPos = mapFragment.getCurrentPositionMeters()
+                if (lastPos != null) {
+                    actualStartNode = graphManager.getAllNodes().minByOrNull {
+                        hypot(it.x_m - lastPos.first, it.y_m - lastPos.second)
+                    }
+                    Log.i("NavigationActivity", "📍 Using current position as start (${actualStartNode?.label})")
                 } else {
-                    Log.i("NavigationActivity", "📶 Wi-Fi scan started.")
+                    actualStartNode = graphManager.getNodeByLabel("1-01")
                 }
-
-                handler.postDelayed(this, scanIntervalMs)
-            }
-        }
-
-        handler.post(scanRunnable!!)
-        registerReceiver(
-            WifiScanReceiver(::onWifiScanResults),
-            IntentFilter(WifiManager.SCAN_RESULTS_AVAILABLE_ACTION)
-        )
-    }
-
-    // 🔹 Called when scan results are ready
-    private fun onWifiScanResults(results: List<ScanResult>) {
-        if (results.isEmpty()) {
-            Log.w("NavigationActivity", "⚠️ Wi-Fi scan returned no results.")
-            return
-        }
-
-        Log.d("NavigationActivity", "Received ${results.size} Wi-Fi results.")
-        results.take(5).forEach {
-            Log.d("NavigationActivity", "➡️ ${it.SSID} (${it.BSSID}) = ${it.level} dBm")
-        }
-
-        val pred = modelInference.predictFromWifi(results)
-        if (pred == null) {
-            Log.e("NavigationActivity", "❌ Model inference failed.")
-            return
-        }
-
-        val predX = pred.first.toDouble()
-        val predY = pred.second.toDouble()
-
-        applyWifiCorrection(predX, predY)
-    }
-
-    // 🔹 Apply predicted Wi-Fi correction to Kalman + map
-    private fun applyWifiCorrection(predX: Double, predY: Double) {
-        if (!fusion.isInitialized()) {
-            fusion.resetTo(predX, predY)
-            lastWifiCorrection = Pair(predX, predY)
-            Log.d("NavigationActivity", "Kalman initialized with Wi-Fi at ($predX, $predY)")
-        } else {
-            val last = lastWifiCorrection
-            val dist = if (last != null) hypot(predX - last.first, predY - last.second)
-            else Double.MAX_VALUE
-
-            if (dist > 0.25) { // 25 cm threshold
-                fusion.correct(predX, predY)
-                lastWifiCorrection = Pair(predX, predY)
-                Log.d(
-                    "NavigationActivity",
-                    "📡 Applied Wi-Fi correction ($predX,$predY), Δ=${"%.2f".format(dist)} m"
-                )
             } else {
-                Log.d(
-                    "NavigationActivity",
-                    "⏸️ Skipped correction (Δ=${"%.2f".format(dist)} m, same position)"
-                )
+                actualStartNode = graphManager.getNodeByLabel(startLabel!!)
             }
+
+            if (actualStartNode == null) {
+                Toast.makeText(this, "Invalid start node.", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+
+            mapFragment.snapToStartNode(actualStartNode)
+            mapFragment.drawRoute(actualStartNode.label!!, destLabel)
+
+            predictedTextView.text = "Route: ${actualStartNode.label} → $destLabel"
+            instructionTextView.text = "Follow the red path to reach $destLabel."
         }
 
-        val (x_m, y_m) = fusion.getPosition()
-        Log.d("NavigationActivity", "📍 Fused position now = ($x_m, $y_m)")
-        mapFragment.updateUserPosition(x_m, y_m)
+        // ---------- Where Am I (Fake coords) ----------
+        locateButton.setOnClickListener {
+            fakeLocateUser()
+        }
+    }
+
+    // ============================================================
+    // Fake coordinate cycle system
+    // ============================================================
+    private fun fakeLocateUser() {
+        // Clear any route
+        mapFragment.clearRoute()
+
+        loadingOverlay.visibility = View.VISIBLE
+        loadingText.text = "📡 Locating..."
+        predictedTextView.text = "Scanning nearby Wi-Fi..."
+        instructionTextView.text = "Please wait..."
+
+        val delay = Random.nextLong(1500, 4000)
+
+        Handler(Looper.getMainLooper()).postDelayed({
+            loadingOverlay.visibility = View.GONE
+
+            // Get the next fake coordinate (loop when reaching end)
+            val fakePos = fakeLocations[fakeIndex % fakeLocations.size]
+            fakeIndex++
+
+            mapFragment.updateUserPosition(fakePos.first, fakePos.second)
+            predictedTextView.text = "Current position: (${String.format("%.2f", fakePos.first)}, ${String.format("%.2f", fakePos.second)})"
+            instructionTextView.text = "You are here (simulated)."
+
+            Log.i("NavigationActivity", "📍 Fake Wi-Fi position → ${fakePos.first}, ${fakePos.second}")
+            Toast.makeText(this, "📍 Positioned via simulated Wi-Fi scan", Toast.LENGTH_SHORT).show()
+        }, delay)
+    }
+
+    // ============================================================
+    // Sensor setup
+    // ============================================================
+    private fun startSensorManagers() {
+        Log.i("NavigationActivity", "Starting HeadingManager + PDRManager (PDR-only mode)...")
+        headingManager.start()
+        pdrManager.start { stepLength, _, heading ->
+            mapFragment.onStepTaken(stepLength, heading)
+        }
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        scanRunnable?.let { handler.removeCallbacks(it) }
-        modelInference.close()
+        try { pdrManager.stop() } catch (_: Exception) {}
+        try { headingManager.stop() } catch (_: Exception) {}
     }
 }

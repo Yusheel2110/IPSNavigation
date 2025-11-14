@@ -19,7 +19,7 @@ import kotlin.math.sqrt
  * - Use raw RSSI values (no scaling on Android) to compute euclidean distance.
  *
  * Extensive logging added to determine whether mismatch is on Android (ordering, missing BSSIDs)
- * or on the training side (CSV column count, coordinate units).
+ * or on the training side (CSV column / coordinate units).
  */
 class ModelInference(private val context: Context) {
 
@@ -59,13 +59,15 @@ class ModelInference(private val context: Context) {
             csvBssidOrder.clear()
             for (i in 0 until numFeatures) csvBssidOrder.add(header[i].lowercase())
 
-            Log.i("ModelInference", "📋 CSV header read. feature columns=$numFeatures bssids (sample): ${csvBssidOrder.take(10)}")
+            Log.i(
+                "ModelInference",
+                "📋 CSV header read. feature columns=$numFeatures bssids (sample): ${csvBssidOrder.take(10)}"
+            )
 
             // inform FeatureVectorBuilder to use same ordering
             featureBuilder.setReferenceBssidOrder(csvBssidOrder)
 
             var lineCount = 0
-            // optional: log first few rows for diagnostics
             val previewRows = mutableListOf<String>()
 
             reader.forEachLine { line ->
@@ -101,7 +103,10 @@ class ModelInference(private val context: Context) {
                 val minY = referenceCoords.minOf { it.second }
                 Log.i("ModelInference", "Reference coords range x:[${minX}-${maxX}] y:[${minY}-${maxY}]")
                 if (maxX <= 1.1 && maxY <= 1.1) {
-                    Log.w("ModelInference", "⚠️ Reference coords appear normalized (0..1). Map expects meters — check training/export.")
+                    Log.w(
+                        "ModelInference",
+                        "⚠️ Reference coords appear normalized (0..1). Map expects meters — check training/export."
+                    )
                 }
             }
 
@@ -129,16 +134,27 @@ class ModelInference(private val context: Context) {
         val liveVector = featureBuilder.buildVector(scanResults)
 
         // Diagnostic logs to determine where problem is
-        Log.d("ModelInference", "Scan results count=${scanResults.size}; liveVector len=${liveVector.size}. sample=${liveVector.take(10)}")
-        Log.d("ModelInference", "CSV BSSID count=${csvBssidOrder.size}; refVectorsCount=${referenceVectors.size}")
+        Log.d(
+            "ModelInference",
+            "Scan results count=${scanResults.size}; liveVector len=${liveVector.size}. sample=${liveVector.take(10)}"
+        )
+        Log.d(
+            "ModelInference",
+            "CSV BSSID count=${csvBssidOrder.size}; refVectorsCount=${referenceVectors.size}"
+        )
 
         if (liveVector.isEmpty()) {
-            Log.e("ModelInference", "❌ liveVector empty — no bssid order available on Android or CSV order mismatch")
+            Log.e(
+                "ModelInference",
+                "❌ liveVector empty — no bssid order available on Android or CSV order mismatch"
+            )
             return null
         }
         if (liveVector.size != referenceVectors[0].size) {
-            Log.w("ModelInference", "⚠️ Feature length mismatch: live=${liveVector.size}, ref=${referenceVectors[0].size}")
-            // still continue (in case sizes match later) but this is a red flag
+            Log.w(
+                "ModelInference",
+                "⚠️ Feature length mismatch: live=${liveVector.size}, ref=${referenceVectors[0].size}"
+            )
         }
 
         val distances = mutableListOf<Pair<Double, Int>>()
@@ -172,7 +188,12 @@ class ModelInference(private val context: Context) {
         val predX = (sumX / sumWeights).toFloat()
         val predY = (sumY / sumWeights).toFloat()
 
-        Log.d("ModelInference", "📍 Predicted Position -> x=$predX , y=$predY ; nearest dists=${nearest.map { String.format("%.2f", it.first) }}")
+        Log.d(
+            "ModelInference",
+            "📍 Predicted Position -> x=$predX , y=$predY ; nearest dists=${
+                nearest.map { String.format("%.2f", it.first) }
+            }"
+        )
         return Pair(predX, predY)
     }
 
@@ -183,10 +204,8 @@ class ModelInference(private val context: Context) {
             val diff = (v1[i] - v2[i])
             sum += diff * diff
         }
-        // if lengths differ, penalize difference (shouldn't happen if everything is aligned)
         if (v1.size != v2.size) {
-            val diff = (v1.size - v2.size).toDouble()
-            sum += diff * diff * 1000.0
+            sum += ((v1.size - v2.size) * 10.0)
         }
         return sqrt(sum)
     }
