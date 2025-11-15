@@ -213,7 +213,7 @@ class MapFragment : Fragment() {
         val updated = baseFloorplan.copy(Bitmap.Config.ARGB_8888, true)
         val canvas = Canvas(updated)
 
-        // Draw route
+        // Draw the remaining route
         routePath?.let { path ->
             val paint = Paint().apply {
                 color = Color.RED
@@ -221,13 +221,19 @@ class MapFragment : Fragment() {
                 style = Paint.Style.STROKE
                 isAntiAlias = true
             }
+
+            // Loop through the path and draw the remaining route segments
             for (i in 0 until path.size - 1) {
-                val (rx1, ry1) = toPx(path[i].x_m, path[i].y_m)
-                val (rx2, ry2) = toPx(path[i + 1].x_m, path[i + 1].y_m)
-                canvas.drawLine(rx1, ry1, rx2, ry2, paint)
+                // If the segment is after the current position, draw it
+                if (i >= currentEdgeIndex || (i == currentEdgeIndex && progressOnEdge > 0)) {
+                    val (rx1, ry1) = toPx(path[i].x_m, path[i].y_m)
+                    val (rx2, ry2) = toPx(path[i + 1].x_m, path[i + 1].y_m)
+                    canvas.drawLine(rx1, ry1, rx2, ry2, paint)
+                }
             }
         }
 
+        // Draw the user (dot and heading)
         if (arrowVisible) {
             val userPaint = Paint().apply {
                 color = Color.CYAN
@@ -241,6 +247,7 @@ class MapFragment : Fragment() {
         mapView.setImageBitmap(updated)
         currentBitmap = updated
     }
+
 
     private fun drawHeadingArrow(canvas: Canvas) {
         val arrowLength = 45f

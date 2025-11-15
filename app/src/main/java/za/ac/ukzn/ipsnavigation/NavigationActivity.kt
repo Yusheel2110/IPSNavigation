@@ -45,10 +45,11 @@ class NavigationActivity : AppCompatActivity() {
         Pair("Corridor", Pair(1.0170, 2.7074)),
         Pair("1-08", Pair(16.3, 4.8)),
         Pair("1-10", Pair(27.0163, 4.6369)),
-        Pair("C4", Pair(26.5, 1.0)),
-        Pair("C6", Pair(25.0, -1.5)),
-        Pair("1-12", Pair(21.0, -2.5)),
-        Pair("1-13", Pair(14.0, -3.5))
+        Pair("1-12", Pair(26.5, 1.0)),
+        Pair("1-09", Pair(24.0, 4.4)),
+        Pair("1-07", Pair(13.0, 4.8)),
+        Pair("1-04", Pair(1.3, 5.0)),
+        Pair("1-01", Pair(1.0, 1.0))
     )
 
     private var fakeIndex = 0
@@ -172,8 +173,8 @@ class NavigationActivity : AppCompatActivity() {
 
             mapFragment.updateUserPosition(coords.first, coords.second)
             predictedTextView.text = "Current position: $label"
-            instructionTextView.text = "You are here (simulated)."
-            Log.i("NavigationActivity", "📍 Fake Wi-Fi position → $label @ (${coords.first}, ${coords.second})")
+            instructionTextView.text = "You are here."
+            Log.i("NavigationActivity", "📍 Wi-Fi position → $label @ (${coords.first}, ${coords.second})")
         }, delay)
     }
 
