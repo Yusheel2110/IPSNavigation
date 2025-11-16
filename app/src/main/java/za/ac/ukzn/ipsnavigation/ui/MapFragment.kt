@@ -2,6 +2,7 @@ package za.ac.ukzn.ipsnavigation.ui
 
 import android.graphics.*
 import android.os.Bundle
+import android.os.Handler
 import android.util.Log
 import android.view.*
 import android.widget.ImageButton
@@ -62,6 +63,14 @@ class MapFragment : Fragment() {
     private val headingSmoothingFactor = 0.15f // smaller = slower turn, 0.15–0.25 feels natural
 
     // ============================================================
+    //  NEW: Step timeout tracker (no steps for >5s warning)
+    // ============================================================
+    private val stepTimeoutMs = 5000L
+    private var lastStepTime = 0L
+    private val stepTimeoutHandler = Handler()
+    private var stepTimeoutRunnable: Runnable? = null
+
+    // ============================================================
     //  Lifecycle
     // ============================================================
     override fun onCreateView(
@@ -95,6 +104,10 @@ class MapFragment : Fragment() {
         val path = routePath ?: return
         if (currentEdgeIndex >= path.size - 1) return
 
+        // Reset timeout when a step is detected
+        lastStepTime = System.currentTimeMillis()
+        resetStepTimeoutTimer()
+
         val start = path[currentEdgeIndex]
         val end = path[currentEdgeIndex + 1]
         val edgeLen = hypot(end.x_m - start.x_m, end.y_m - start.y_m)
@@ -117,6 +130,25 @@ class MapFragment : Fragment() {
         val y = s.y_m + (e.y_m - s.y_m) * progressOnEdge
 
         animateUserTo(x, y)
+    }
+
+    // ============================================================
+    //  NEW: Step timeout logic
+    // ============================================================
+    private fun resetStepTimeoutTimer() {
+        stepTimeoutRunnable?.let { stepTimeoutHandler.removeCallbacks(it) }
+        stepTimeoutRunnable = Runnable {
+            val elapsed = System.currentTimeMillis() - lastStepTime
+            if (elapsed >= stepTimeoutMs && routePath != null) {
+                Toast.makeText(
+                    requireContext(),
+                    "⚠️ Wrong route — please return to initial start position",
+                    Toast.LENGTH_LONG
+                ).show()
+                Log.w("MapFragment", "🚫 Step timeout: no steps for ${elapsed}ms")
+            }
+        }
+        stepTimeoutHandler.postDelayed(stepTimeoutRunnable!!, stepTimeoutMs)
     }
 
     // ============================================================
@@ -198,6 +230,10 @@ class MapFragment : Fragment() {
         fadeInArrow()
         redrawMap()
         Log.d("MapFragment", "🗺️ Route drawn ($startLabel → $goalLabel)")
+
+        // Start the timeout once a route is drawn
+        lastStepTime = System.currentTimeMillis()
+        resetStepTimeoutTimer()
     }
 
     fun updateUserPosition(x_m: Double, y_m: Double) {
@@ -222,9 +258,7 @@ class MapFragment : Fragment() {
                 isAntiAlias = true
             }
 
-            // Loop through the path and draw the remaining route segments
             for (i in 0 until path.size - 1) {
-                // If the segment is after the current position, draw it
                 if (i >= currentEdgeIndex || (i == currentEdgeIndex && progressOnEdge > 0)) {
                     val (rx1, ry1) = toPx(path[i].x_m, path[i].y_m)
                     val (rx2, ry2) = toPx(path[i + 1].x_m, path[i + 1].y_m)
@@ -233,7 +267,7 @@ class MapFragment : Fragment() {
             }
         }
 
-        // Draw the user (dot and heading)
+        // Draw user
         if (arrowVisible) {
             val userPaint = Paint().apply {
                 color = Color.CYAN
@@ -247,7 +281,6 @@ class MapFragment : Fragment() {
         mapView.setImageBitmap(updated)
         currentBitmap = updated
     }
-
 
     private fun drawHeadingArrow(canvas: Canvas) {
         val arrowLength = 45f
@@ -297,9 +330,6 @@ class MapFragment : Fragment() {
         mapView.animate().alpha(1f).setDuration(600).start()
     }
 
-    // ============================================================
-    //  Clear route + get last known position (for "Current Location")
-    // ============================================================
     fun clearRoute() {
         routePath = null
         currentEdgeIndex = 0

@@ -40,7 +40,7 @@ class NavigationActivity : AppCompatActivity() {
     private lateinit var predictedTextView: TextView
     private lateinit var instructionTextView: TextView
 
-    // Fake Wi-Fi coordinate list (simulate sequential localization results)
+    //  Wi-Fi coordinate list (simulate sequential localization results)
     private val fakeLocations = listOf(
         Pair("Corridor", Pair(1.0170, 2.7074)),
         Pair("1-08", Pair(16.3, 4.8)),
